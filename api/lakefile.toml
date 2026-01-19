@@ -8,3 +8,4 @@ name = "AfvRpcApi"
 [[lean_exe]]
 name = "afv-rpc-api"
 root = "Main"
+

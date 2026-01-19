@@ -1,5 +1,15 @@
 {"version": "1.1.0",
  "packagesDir": ".lake/packages",
- "packages": [],
+ "packages":
+ [{"url": "https://github.com/input-output-hk/Lean-blaster",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "4ab17ba5e4dd93310a3da1420a2ddd692236c191",
+   "name": "Solver",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "staging",
+   "inherited": false,
+   "configFile": "lakefile.lean"}],
  "name": "AfvExample",
  "lakeDir": ".lake"}
