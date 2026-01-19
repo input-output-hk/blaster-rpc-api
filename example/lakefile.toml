@@ -1,0 +1,10 @@
+name = "AfvExample"
+version = "0.1.0"
+defaultTargets = ["afvexample"]
+
+[[lean_lib]]
+name = "AfvExample"
+
+[[lean_exe]]
+name = "afvexample"
+root = "Main"

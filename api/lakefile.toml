@@ -1,0 +1,10 @@
+name = "afv-rpc-api"
+version = "0.1.0"
+defaultTargets = ["afv-rpc-api"]
+
+[[lean_lib]]
+name = "AfvRpcApi"
+
+[[lean_exe]]
+name = "afv-rpc-api"
+root = "Main"
