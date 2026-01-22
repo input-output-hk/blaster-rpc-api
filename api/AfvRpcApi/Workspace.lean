@@ -1,5 +1,8 @@
 import AfvRpcApi.Types
 import Std.Data.HashMap
+import Lean.Parser.Module
+import Lean.Elab.DeclModifiers
+import Lean.Data.Lsp.Utf16
 
 namespace AfvRpcApi.Workspace
 
@@ -17,33 +20,61 @@ def generateTheoremId (filePath : String) (label : String) (line : Nat) : IO Str
   let hash := filePath.hash.toNat + label.hash.toNat + line + counter
   return s!"{hash}"
 
-/-- Extract theorems from file content using simple regex matching. -/
+/-- Extract theorems from file content using Lean's parser. -/
 def extractTheorems (filePath : String) (content : String) : IO (Array Theorem) := do
-  let lines := content.splitOn "\n"
-  let mut theorems := #[]
+  let inputCtx := Lean.Parser.mkInputContext content filePath
+  let theorems := #[]
 
-  for idx in [:lines.length] do
-    let line := lines[idx]!
-    -- Simple pattern matching: lines starting with "theorem "
-    if line.trimLeft.startsWith "theorem " then
-      -- Extract theorem name (word after "theorem ")
-      let afterTheorem := (line.trimLeft.drop 8).trim
-      let name := afterTheorem.takeWhile (fun c => c.isAlphanum || c == '_' || c == '\'')
+  let (_, parserState, headerMessages) ← Lean.Parser.parseHeader inputCtx
+  if headerMessages.hasErrors then
+    headerMessages.forM fun msg => do
+      let rendered ← msg.toString
+      IO.eprintln s!"Warning: Failed to parse header for {filePath}: {rendered}"
+    return theorems
 
-      if !name.isEmpty then
-        let id ← generateTheoremId filePath name idx
-        let thm : Theorem := {
-          id := id
-          label := name
-          path := filePath
-          range := {
-            startLine := idx
-            startCharacter := 0
-            endLine := idx
-            endCharacter := line.length
+  let env ← Lean.mkEmptyEnvironment
+  let pmctx : Lean.Parser.ParserModuleContext := { env := env, options := {} }
+
+  let mut state := parserState
+  let mut messages := headerMessages
+  let mut acc := theorems
+  let mut done := false
+
+  while !done do
+    let (stx, state', messages') := Lean.Parser.parseCommand inputCtx pmctx state messages
+    state := state'
+    messages := messages'
+
+    if stx.isOfKind ``Lean.Parser.Command.declaration then
+      let decl := stx[1]
+      if decl.getKind == ``Lean.Parser.Command.theorem then
+        let declId := decl[1]
+        let (name, _) := Lean.Elab.expandDeclIdCore declId
+        if let some range := decl.getRange? then
+          let lspRange := Lean.FileMap.utf8RangeToLspRange inputCtx.fileMap range
+          let id ← generateTheoremId filePath name.toString lspRange.start.line
+          let thm : Theorem := {
+            id := id
+            label := name.toString
+            path := filePath
+            range := {
+              startLine := lspRange.start.line
+              startCharacter := lspRange.start.character
+              endLine := lspRange.end.line
+              endCharacter := lspRange.end.character
+            }
           }
-        }
-        theorems := theorems.push thm
+          acc := acc.push thm
+
+    if Lean.Parser.isTerminalCommand stx then
+      done := true
+
+  let theorems := acc
+
+  if messages.hasErrors then
+    messages.forM fun msg => do
+      let rendered ← msg.toString
+      IO.eprintln s!"Warning: Parse issue in {filePath}: {rendered}"
 
   return theorems
 
