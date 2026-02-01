@@ -51,10 +51,14 @@ instance : Repr TheoremStatus where
   reprPrec s _ := repr s.toString
 
 structure TheoremResult where
-  thm : Theorem
+  «theorem» : Theorem
   time : Option Nat
   status : TheoremStatus
-  deriving ToJson, FromJson, Inhabited, Repr
+  details : Json
+  deriving ToJson, FromJson, Inhabited
+
+instance : Repr TheoremResult where
+  reprPrec r _ := s!"TheoremResult({r.«theorem».id}, {r.status.toString}, {r.time})"
 
 inductive NodeType where
   | folder

@@ -17,6 +17,15 @@ if [[ ! -d "${EXAMPLE_DIR}" ]]; then
   exit 1
 fi
 
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "Error: python3 or python is required" >&2
+  exit 1
+fi
+
 TMP_DIR="$(mktemp -d)"
 IN_FIFO="${TMP_DIR}/in.fifo"
 OUT_FIFO="${TMP_DIR}/out.fifo"
@@ -40,13 +49,7 @@ trap cleanup EXIT
 
 pretty_print() {
   local payload="$1"
-  if command -v python3 >/dev/null 2>&1; then
-    printf '%s\n' "${payload}" | python3 -m json.tool || printf '%s\n' "${payload}"
-  elif command -v python >/dev/null 2>&1; then
-    printf '%s\n' "${payload}" | python -m json.tool || printf '%s\n' "${payload}"
-  else
-    printf '%s\n' "${payload}"
-  fi
+  printf '%s\n' "${payload}" | "${PYTHON}" -m json.tool || printf '%s\n' "${payload}"
 }
 
 send_msg() {
@@ -83,21 +86,21 @@ read_msg() {
 }
 
 init_json=$(printf '{"jsonrpc":"2.0","method":"initializeWorkspace","params":{"workspacePaths":["%s"]}}' "${EXAMPLE_DIR}")
-req_json='{"jsonrpc":"2.0","id":1,"method":"getWorkspace","params":null}'
+workspace_json='{"jsonrpc":"2.0","id":1,"method":"getWorkspace","params":null}'
 exit_json='{"jsonrpc":"2.0","method":"exit","params":null}'
 
 send_msg "${init_json}"
-send_msg "${req_json}"
+send_msg "${workspace_json}"
 
-notification=$(read_msg)
-response=$(read_msg)
+notification_response=$(read_msg)
+workspace_response=$(read_msg)
 
 printf '> Received notification:\n' >&2
-pretty_print "${notification}"
+pretty_print "${notification_response}"
 printf '\n' >&2
 
 printf '> Received response:\n' >&2
-pretty_print "${response}"
+pretty_print "${workspace_response}"
 printf '\n' >&2
 
 send_msg "${exit_json}"

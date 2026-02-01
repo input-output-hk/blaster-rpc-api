@@ -1,4 +1,5 @@
 import AfvRpcApi.Types
+import Lean.Data.Json
 import Std.Data.HashMap
 
 namespace AfvRpcApi.State
@@ -31,9 +32,10 @@ partial def initializeWorkspaceResults (nodes : Array Node) (results : HashMap S
     | .file _ _ theorems =>
       theorems.foldl (fun acc' thm =>
         acc'.insert thm.id {
-          thm := thm
+          «theorem» := thm
           time := none
           status := .undetermined
+          details := Lean.Json.mkObj [("diagnostics", Lean.Json.arr #[])]
         }
       ) acc
   ) results
@@ -73,7 +75,8 @@ def getAllResults (state : StateRef) : IO (HashMap String TheoremResult) := do
   return s.results
 
 /-- Update theorem status. -/
-def updateTheoremStatus (state : StateRef) (theoremId : String) (status : TheoremStatus) (time : Option Nat := none) : IO Unit := do
+def updateTheoremStatus (state : StateRef) (theoremId : String) (status : TheoremStatus)
+    (time : Option Nat := none) (details : Option Lean.Json := none) : IO Unit := do
   let s ← state.get
   match s.results.get? theoremId with
   | some result =>
@@ -81,6 +84,7 @@ def updateTheoremStatus (state : StateRef) (theoremId : String) (status : Theore
       result with
       status := status
       time := time <|> result.time
+      details := details.getD result.details
     }
     state.set {
       s with results := s.results.insert theoremId updatedResult
