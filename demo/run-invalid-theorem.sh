@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "${SCRIPT_DIR}/.." && pwd)
 API_BIN="${ROOT_DIR}/api/.lake/build/bin/afv-rpc-api"
-EXAMPLE_DIR="${ROOT_DIR}/example/AfvExample"
+EXAMPLE_DIR="${ROOT_DIR}/example"
 
 if [[ ! -x "${API_BIN}" ]]; then
   echo "Error: RPC binary not found or not executable at ${API_BIN}" >&2
@@ -107,7 +107,7 @@ theorem_id=$(printf '%s' "${workspace_response}" | "${PYTHON}" -c '
 import json, sys
 
 TARGET_PATH = "example/AfvExample/Test1.lean"
-TARGET_LABEL = "example_theorem_1"
+TARGET_LABEL = "example_invalid_theorem"
 
 def find_theorem_id(node_or_nodes):
   if isinstance(node_or_nodes, list):
@@ -138,7 +138,7 @@ print(found or "")
 ')
 
 if [[ -z "${theorem_id}" ]]; then
-  echo "Error: example_theorem_1 not found in Test1.lean" >&2
+  echo "Error: example_invalid_theorem not found in Test1.lean" >&2
   send_msg "${exit_json}"
   exit 1
 fi

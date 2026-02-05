@@ -8,4 +8,6 @@ theorem example_theorem_2 : 2 + 2 = 4 := by blaster
 
 theorem example_theorem_3 : 3 + 3 = 6 := by blaster
 
+theorem example_invalid_theorem : 2 + 2 = 3 := by blaster
+
 end AfvExample.Test1

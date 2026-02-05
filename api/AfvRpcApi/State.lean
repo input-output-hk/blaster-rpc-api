@@ -5,12 +5,14 @@ import Std.Data.HashMap
 namespace AfvRpcApi.State
 
 open AfvRpcApi
+open Lean
 open Std (HashMap)
 
 /-- Server state containing workspaces and theorem results. -/
 structure ServerState where
   workspaces : Array Workspace
   results    : HashMap String TheoremResult
+  workspaceSearchPaths : HashMap String System.SearchPath
   deriving Inhabited
 
 /-- Thread-safe reference to server state. -/
@@ -21,6 +23,7 @@ def initState : IO StateRef := do
   IO.mkRef {
     workspaces := #[]
     results := {}
+    workspaceSearchPaths := {}
   }
 
 /-- Recursively initialize results for all theorems in nodes. -/
@@ -56,6 +59,7 @@ def setWorkspaces (state : StateRef) (workspaces : Array Workspace) : IO Unit :=
   state.set {
     workspaces := workspaces
     results := results
+    workspaceSearchPaths := {}
   }
 
 /-- Get result for a specific theorem ID. -/
@@ -73,6 +77,15 @@ def setResult (state : StateRef) (theoremId : String) (result : TheoremResult) :
 def getAllResults (state : StateRef) : IO (HashMap String TheoremResult) := do
   let s ← state.get
   return s.results
+
+def getWorkspaceSearchPath (state : StateRef) (root : String) : IO (Option System.SearchPath) := do
+  let s ← state.get
+  return s.workspaceSearchPaths.get? root
+
+def setWorkspaceSearchPath (state : StateRef) (root : String) (sp : System.SearchPath) : IO Unit := do
+  state.modify fun s => {
+    s with workspaceSearchPaths := s.workspaceSearchPaths.insert root sp
+  }
 
 /-- Update theorem status. -/
 def updateTheoremStatus (state : StateRef) (theoremId : String) (status : TheoremStatus)

@@ -112,6 +112,8 @@ partial def scanFolder (path : String) : IO (Option Node) := do
       let entryPath := entry.path.toString
 
       if ← entry.path.isDir then
+        if entry.path.fileName == some ".lake" then
+          continue
         -- Recursively scan subdirectory
         if let some childNode ← scanFolder entryPath then
           children := children.push childNode
@@ -154,6 +156,8 @@ def scanWorkspace (path : String) : IO (Option Workspace) := do
       let entryPath := entry.path.toString
 
       if ← entry.path.isDir then
+        if entry.path.fileName == some ".lake" then
+          continue
         -- Recursively scan subdirectory
         if let some childNode ← scanFolder entryPath then
           children := children.push childNode

@@ -1,11 +1,18 @@
 import AfvRpcApi.Types
 import AfvRpcApi.State
 import Std.Data.HashMap
+import Std.Data.HashSet
 import Lean.Data.Lsp
 import Lean.Parser.Module
 import Lean.Elab.Command
 import Lean.Elab.Import
 import Lean.Language.Lean
+import Lake.Config.InstallPath
+import Lake.Config.Env
+import Lake.Load.Config
+import Lake.Load.Workspace
+import Lake.Util.Log
+import Std.Internal.Async.System
 
 namespace AfvRpcApi.TheoremRunner
 
@@ -14,7 +21,8 @@ open AfvRpcApi
 /-! ## LSP-style Verification -/
 
 open Lean
-open Std (HashMap)
+open Std (HashMap HashSet)
+open System (FilePath)
 
 private def toLspPos (pos : Position) : Lsp.Position :=
   let line := if pos.line == 0 then 0 else pos.line - 1
@@ -52,7 +60,7 @@ private def messageRange (msg : Message) : Lsp.Range :=
   let stop := toLspPos (msg.endPos.getD msg.pos)
   normalizeRange { start := start, «end» := stop }
 
-private def messageToDiagnosticJson (msg : Message) : IO Json := do
+private def diagnosticFromMessage (msg : Message) : IO (String × Json) := do
   let severity :=
     match msg.severity with
     | .error => "error"
@@ -60,16 +68,18 @@ private def messageToDiagnosticJson (msg : Message) : IO Json := do
     | .information => "information"
   let range := messageRange msg
   let messageText ← msg.toString
-  return Json.mkObj [
+  let key := s!"{severity}|{range.start.line}|{range.start.character}|{range.end.line}|{range.end.character}|{messageText}"
+  let json := Json.mkObj [
     ("severity", Json.str severity),
     ("message", Json.str messageText),
     ("range", Json.mkObj [
-      ("startLine", Json.num range.start.line),
+      ("startLine", Json.num (range.start.line.succ)),
       ("startCharacter", Json.num range.start.character),
-      ("endLine", Json.num range.end.line),
+      ("endLine", Json.num (range.end.line.succ)),
       ("endCharacter", Json.num range.end.character)
     ])
   ]
+  return (key, json)
 
 private def collectFileMessages (path : String) : IO (Array Message) := do
   let content ← IO.FS.readFile path
@@ -85,6 +95,75 @@ private def collectFileMessages (path : String) : IO (Array Message) := do
     |>.getAll.map (·.diagnostics.msgLog)
     |>.foldl (· ++ ·) {}
   return messages.reportedPlusUnreported.toArray
+
+private def resolveWorkspaceRoot (workspaces : Array Workspace) (path : String) : Option String :=
+  workspaces.foldl
+    (fun best ws =>
+      if path.startsWith ws.path then
+        match best with
+        | none => some ws.path
+        | some current =>
+          if ws.path.length > current.length then some ws.path else best
+      else
+        best)
+    none
+
+private def loadWorkspaceSearchPath (root : String) : IO (Option SearchPath) := do
+  let toolchainFile := FilePath.mk root / "lean-toolchain"
+  let mut prevToolchain? : Option String := none
+  if ← toolchainFile.pathExists then
+    prevToolchain? ← IO.getEnv "ELAN_TOOLCHAIN"
+    let toolchain := (← IO.FS.readFile toolchainFile).trim
+    if !toolchain.isEmpty then
+      Std.Internal.IO.Async.System.setEnvVar "ELAN_TOOLCHAIN" toolchain
+  let envSysroot? ← try
+    let sysroot ← Lean.findSysroot
+    let lean ← Lake.LeanInstall.get sysroot (collocated := true)
+    let lake := Lake.LakeInstall.ofLean lean
+    let elan? ← Lake.findElanInstall?
+    let envResult ← Lake.Env.compute lake lean elan? |>.toIO'
+    match envResult with
+    | Except.ok env =>
+      pure (some env)
+    | Except.error err =>
+      IO.eprintln s!"Error computing Lake environment via sysroot: {err}"
+      pure none
+  catch _ =>
+    pure none
+  let env? ← match envSysroot? with
+  | some env =>
+    pure (some env)
+  | none =>
+    let (elan?, lean?, lake?) ← Lake.findInstall?
+    match lean?, lake? with
+    | some lean, some lake =>
+      let envResult ← Lake.Env.compute lake lean elan? |>.toIO'
+      match envResult with
+      | Except.ok env => pure (some env)
+      | Except.error err =>
+        IO.eprintln s!"Error computing Lake environment via install detection: {err}"
+        pure none
+    | _, _ =>
+      IO.eprintln "Error: Unable to locate Lean/Lake installation"
+      pure none
+  match prevToolchain? with
+  | some value => Std.Internal.IO.Async.System.setEnvVar "ELAN_TOOLCHAIN" value
+  | none => Std.Internal.IO.Async.System.unsetEnvVar "ELAN_TOOLCHAIN"
+  match env? with
+  | none =>
+    return none
+  | some env =>
+    let config : Lake.LoadConfig := {
+      lakeEnv := env
+      wsDir := FilePath.mk root
+    }
+    let ws? ← Lake.loadWorkspace config |>.toBaseIO (minLv := .error) (ansiMode := .auto) (out := .stderr)
+    match ws? with
+    | none =>
+      IO.eprintln s!"Error loading Lake workspace at {root}"
+      return none
+    | some ws =>
+      return some ws.augmentedLeanPath
 
 private def getFileMessagesCached
     (cacheRef : IO.Ref (HashMap String (Array Message)))
@@ -117,12 +196,41 @@ def runTheoremVerificationWithCache
     let startTime ← IO.monoMsNow
     let (status, details) ← try
       let path := result.«theorem».path
+      let workspaces ← State.getWorkspaces state
+      let workspaceRoot? := resolveWorkspaceRoot workspaces path
+      let searchPath? ← match workspaceRoot? with
+        | none =>
+          pure none
+        | some root =>
+          match ← State.getWorkspaceSearchPath state root with
+          | some sp =>
+            pure (some sp)
+          | none =>
+            let sp? ← loadWorkspaceSearchPath root
+            match sp? with
+            | some sp =>
+              State.setWorkspaceSearchPath state root sp
+              pure (some sp)
+            | none =>
+              pure none
+      match searchPath? with
+      | some sp =>
+        Lean.searchPathRef.set sp
+      | none =>
+        IO.eprintln s!"Warning: No workspace context for {path}"
       let theoremRange := theoremRangeToLsp result.«theorem».range
       let msgs ← getFileMessagesCached cacheRef path
       let relevantMsgs := msgs.filter fun msg =>
         msg.fileName == path && rangesIntersect theoremRange (messageRange msg)
       let hasError := relevantMsgs.any (·.severity == .error)
-      let diagnostics := Json.arr <| (← relevantMsgs.mapM messageToDiagnosticJson)
+      let mut seen : HashSet String := {}
+      let mut diagnosticArr : Array Json := #[]
+      for msg in relevantMsgs do
+        let (key, diagnostic) ← diagnosticFromMessage msg
+        if !seen.contains key then
+          seen := seen.insert key
+          diagnosticArr := diagnosticArr.push diagnostic
+      let diagnostics := Json.arr diagnosticArr
       let details := Json.mkObj [("diagnostics", diagnostics)]
       let status := if hasError then TheoremStatus.invalid else TheoremStatus.valid
       pure (status, details)
