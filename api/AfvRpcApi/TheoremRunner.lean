@@ -196,6 +196,7 @@ def runTheoremVerificationWithCache
     let startTime ← IO.monoMsNow
     let (status, details) ← try
       let path := result.«theorem».path
+      let pathReal ← IO.FS.realPath path
       let workspaces ← State.getWorkspaces state
       let workspaceRoot? := resolveWorkspaceRoot workspaces path
       let searchPath? ← match workspaceRoot? with
@@ -220,8 +221,11 @@ def runTheoremVerificationWithCache
         IO.eprintln s!"Warning: No workspace context for {path}"
       let theoremRange := theoremRangeToLsp result.«theorem».range
       let msgs ← getFileMessagesCached cacheRef path
-      let relevantMsgs := msgs.filter fun msg =>
-        msg.fileName == path && rangesIntersect theoremRange (messageRange msg)
+      let mut relevantMsgs : Array Message := #[]
+      for msg in msgs do
+        let msgPathReal ← IO.FS.realPath msg.fileName
+        if msgPathReal == pathReal && rangesIntersect theoremRange (messageRange msg) then
+          relevantMsgs := relevantMsgs.push msg
       let hasError := relevantMsgs.any (·.severity == .error)
       let mut seen : HashSet String := {}
       let mut diagnosticArr : Array Json := #[]
