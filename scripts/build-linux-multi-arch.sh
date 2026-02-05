@@ -43,7 +43,13 @@ for platform in "${platforms[@]}"; do
     exit 1
   fi
 
-  out_bin="${OUT_DIR}/afv-rpc-api-${platform//\//-}"
+  out_suffix="${platform//\//-}"
+  if [[ "${platform}" == "linux/amd64" ]]; then
+    out_suffix="linux-x64"
+  elif [[ "${platform}" == "linux/arm64" ]]; then
+    out_suffix="linux-arm64"
+  fi
+  out_bin="${OUT_DIR}/afv-rpc-api-${out_suffix}"
   cp "${src_bin}" "${out_bin}"
   chmod +x "${out_bin}"
   echo "Wrote ${out_bin}" >&2
