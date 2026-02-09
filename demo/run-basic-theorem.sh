@@ -145,7 +145,7 @@ if [[ -z "${theorem_id}" ]]; then
   exit 1
 fi
 
-theorem_json=$(printf '{"jsonrpc":"2.0","method":"runTheorem","params":["%s"]}' "${theorem_id}")
+theorem_json=$(printf '{"jsonrpc":"2.0","method":"runTheorem","params":{"theoremIds":["%s"]}}' "${theorem_id}")
 send_msg "${theorem_json}"
 
 theorem_response=$(read_msg)

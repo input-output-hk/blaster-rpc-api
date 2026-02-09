@@ -71,8 +71,11 @@ def handleUpdateWorkspace (params : WorkspaceParams) : ServerM Unit := do
   -- Update state
   State.setWorkspaces ctx.state workspaces
 
+  -- Send workspaceUpdated notification
+  sendNotification "workspaceUpdated" workspaces
+
 /-- Handle runTheorem notification. -/
-def handleRunTheorem (theoremIds : Array String) : ServerM Unit := do
+def handleRunTheorem (params : RunTheoremParams) : ServerM Unit := do
   let ctx ← read
 
   -- Define callback to send testResult notification
@@ -90,7 +93,7 @@ def handleRunTheorem (theoremIds : Array String) : ServerM Unit := do
 
   -- Spawn background task to run theorems (don't wait)
   let _ ← IO.asTask do
-    TheoremRunner.runTheoremsSequentially ctx.state theoremIds onComplete
+    TheoremRunner.runTheoremsSequentially ctx.state params.theoremIds onComplete
 
   return ()
 
@@ -126,7 +129,7 @@ def dispatchNotification (method : String) (params : Json) : ServerM Unit := do
 
   | "runTheorem" =>
     match fromJson? params with
-    | Except.ok (ids : Array String) => handleRunTheorem ids
+    | Except.ok (p : RunTheoremParams) => handleRunTheorem p
     | Except.error err =>
       IO.eprintln s!"Error parsing runTheorem params: {err}"
 
@@ -145,7 +148,7 @@ def dispatchRequest (id : RequestID) (method : String) (params : Json) : ServerM
 
   | "getTheoremResult" =>
     match fromJson? params with
-    | Except.ok (theoremId : String) => handleGetTheoremResult id theoremId
+    | Except.ok (p: GetTheoremResultParams) => handleGetTheoremResult id p.theoremId
     | Except.error err =>
       sendError id ErrorCode.invalidParams s!"Invalid params: {err}"
 

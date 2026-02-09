@@ -40,7 +40,6 @@ fi
 
 echo "Building for darwin/${native_arch}..." >&2
 (cd "${API_DIR}" && lake clean && lake build "${build_flags[@]}")
-strip -x "${API_DIR}/.lake/build/bin/afv-rpc-api"
 out_bin="${OUT_DIR}/afv-rpc-api-${native_suffix}"
 cp "${API_DIR}/.lake/build/bin/afv-rpc-api" "${out_bin}"
 chmod +x "${out_bin}"
@@ -55,7 +54,6 @@ if (cd "${API_DIR}" && lake clean && \
   SDKROOT="${sdk_path}" \
   MACOSX_DEPLOYMENT_TARGET="11.0" \
   lake build "${build_flags[@]}"); then
-  strip -x "${API_DIR}/.lake/build/bin/afv-rpc-api"
   out_bin="${OUT_DIR}/afv-rpc-api-${other_suffix}"
   cp "${API_DIR}/.lake/build/bin/afv-rpc-api" "${out_bin}"
   chmod +x "${out_bin}"

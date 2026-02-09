@@ -162,4 +162,12 @@ structure WorkspaceParams where
   workspacePaths : Array String
   deriving ToJson, FromJson, Inhabited, Repr
 
+structure RunTheoremParams where
+  theoremIds : Array String
+  deriving ToJson, FromJson, Inhabited, Repr
+
+structure GetTheoremResultParams where
+  theoremId : String
+  deriving ToJson, FromJson, Inhabited, Repr
+
 end AfvRpcApi
