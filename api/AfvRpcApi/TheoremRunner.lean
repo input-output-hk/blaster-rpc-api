@@ -81,8 +81,67 @@ private def diagnosticFromMessage (msg : Message) : IO (String × Json) := do
   ]
   return (key, json)
 
-private def collectFileMessages (path : String) : IO (Array Message) := do
+private def normalizeProofText (text : String) : String :=
+  String.mk (text.toList.filter (fun c => !c.isWhitespace))
+
+private def isExactBySorry (text : String) : Bool :=
+  normalizeProofText text == "bysorry"
+
+private def replaceRange (content : String) (range : String.Range) (replacement : String) : String :=
+  (content.extract ⟨0⟩ range.start) ++ replacement ++ (content.extract range.stop content.endPos)
+
+private partial def findFirstBySorryRange (content : String) (stx : Syntax) : Option String.Range :=
+  let range? := stx.getRange? |>.orElse (fun _ => stx.getRangeWithTrailing?)
+  let foundInThis :=
+    if stx.isOfKind ``Lean.Parser.Term.byTactic then
+      match range? with
+      | some range =>
+        let text := content.extract range.start range.stop
+        if isExactBySorry text then some range else none
+      | none => none
+    else
+      none
+  match foundInThis with
+  | some range => some range
+  | none =>
+    stx.getArgs.foldl
+      (fun acc child =>
+        match acc with
+        | some _ => acc
+        | none => findFirstBySorryRange content child)
+      none
+
+private def rewriteBySorryInTheorem (path : String) (theoremRange : Range) : IO String := do
   let content ← IO.FS.readFile path
+  try
+    let inputCtx := Parser.mkInputContext content path
+    let (header, _, headerMessages) ← Parser.parseHeader inputCtx
+    if headerMessages.hasErrors then
+      return content
+    let opts := Elab.inServer.set {} true
+    let opts := Elab.async.setIfNotSet opts true
+    let (env, _) ← Elab.processHeader header opts headerMessages inputCtx
+    let moduleStx ← Parser.testParseModule env path content
+    let targetRange := theoremRangeToLsp theoremRange
+    let cmds :=
+      match moduleStx.raw.getArgs[1]? with
+      | some cmdsStx => cmdsStx.getArgs
+      | none => #[]
+    for stx in cmds.toList do
+      if let some range := stx.getRangeWithTrailing? then
+        let lspRange := Lean.FileMap.utf8RangeToLspRange inputCtx.fileMap range
+        if rangesIntersect lspRange targetRange then
+          match findFirstBySorryRange content stx with
+          | some byRange =>
+            return replaceRange content byRange "by blaster"
+          | none =>
+            return content
+    return content
+  catch _ =>
+    return content
+
+private def collectFileMessagesForTheorem (path : String) (theoremRange : Range) : IO (Array Message) := do
+  let content ← rewriteBySorryInTheorem path theoremRange
   let inputCtx := Parser.mkInputContext content path
   let (header, parserState, headerMessages) ← Parser.parseHeader inputCtx
   let opts := Elab.inServer.set {} true
@@ -167,14 +226,17 @@ private def loadWorkspaceSearchPath (root : String) : IO (Option SearchPath) := 
 
 private def getFileMessagesCached
     (cacheRef : IO.Ref (HashMap String (Array Message)))
-    (path : String) : IO (Array Message) := do
+    (path : String)
+    (theoremRange : Range) : IO (Array Message) := do
+  let cacheKey :=
+    s!"{path}::{theoremRange.startLine}:{theoremRange.startCharacter}-{theoremRange.endLine}:{theoremRange.endCharacter}"
   let cache ← cacheRef.get
-  match cache.get? path with
+  match cache.get? cacheKey with
   | some msgs =>
     return msgs
   | none =>
-    let msgs ← collectFileMessages path
-    cacheRef.modify (·.insert path msgs)
+    let msgs ← collectFileMessagesForTheorem path theoremRange
+    cacheRef.modify (·.insert cacheKey msgs)
     return msgs
 
 /-- Run verification for a single theorem.
@@ -220,7 +282,7 @@ def runTheoremVerificationWithCache
       | none =>
         IO.eprintln s!"Warning: No workspace context for {path}"
       let theoremRange := theoremRangeToLsp result.«theorem».range
-      let msgs ← getFileMessagesCached cacheRef path
+      let msgs ← getFileMessagesCached cacheRef path result.theorem.range
       let mut relevantMsgs : Array Message := #[]
       for msg in msgs do
         let msgPathReal ← IO.FS.realPath msg.fileName
