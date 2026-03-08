@@ -47,8 +47,8 @@ private def posLe (a b : Lsp.Position) : Bool :=
 private def rangesIntersect (a b : Lsp.Range) : Bool :=
   let a := normalizeRange a
   let b := normalizeRange b
-  let aBeforeB := posLe a.end b.start
-  let bBeforeA := posLe b.end a.start
+  let aBeforeB := posLt a.end b.start
+  let bBeforeA := posLt b.end a.start
   !(aBeforeB || bBeforeA)
 
 private def theoremRangeToLsp (r : Range) : Lsp.Range :=

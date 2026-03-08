@@ -10,7 +10,7 @@ theorem example_theorem_2 : 2 * 2 = 4 := by sorry
 theorem example_theorem_3 : 3 * 3 = 9 := by sorry
 
 -- Will call z3 but counterexample
-theorem example_false_theorem : ∀ (x y : Nat), x - y <= x := by sorry
+theorem example_false_theorem : ∀ (x y : Nat), x - y < x := by sorry
 
 -- Will call z3 and prove, so solver stats
 theorem example_full_theorem : ∀ (x y : Nat), (x - y)*(y - x) = 0 := by sorry

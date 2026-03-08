@@ -99,6 +99,43 @@ def generateTheoremId (filePath : String) (label : String) (line : Nat) : IO Str
   let hash := filePath.hash.toNat + label.hash.toNat + line + counter
   return s!"{hash}"
 
+private def trimCommandLabel (cmdText : String) : String :=
+  let firstLine :=
+    match cmdText.splitOn "\n" with
+    | line :: _ => line
+    | [] => cmdText
+  let withoutComment :=
+    match firstLine.splitOn "--" with
+    | line :: _ => line
+    | [] => firstLine
+  withoutComment.trim
+
+private def commandTheoremLabel? (cmdText : String) : Option String :=
+  let label := trimCommandLabel cmdText
+  if label.startsWith "#bmc" || label.startsWith "#kind" then
+    some label
+  else
+    none
+
+private def mkTheoremFromRange
+    (inputCtx : Lean.Parser.InputContext)
+    (filePath : String)
+    (label : String)
+    (range : String.Range) : IO Theorem := do
+  let lspRange := Lean.FileMap.utf8RangeToLspRange inputCtx.fileMap range
+  let id ← generateTheoremId filePath label lspRange.start.line
+  return {
+    id := id
+    label := label
+    path := filePath
+    range := {
+      startLine := lspRange.start.line
+      startCharacter := lspRange.start.character
+      endLine := lspRange.end.line
+      endCharacter := lspRange.end.character
+    }
+  }
+
 /-- Extract theorems from file content using Lean's parser. -/
 def extractTheorems (filePath : String) (content : String) : IO (Array Theorem) := do
   let inputCtx := Lean.Parser.mkInputContext content filePath
@@ -138,20 +175,13 @@ def extractTheorems (filePath : String) (content : String) : IO (Array Theorem) 
         let declId := decl[1]
         let (name, _) := Lean.Elab.expandDeclIdCore declId
         if let some range := stx.getRangeWithTrailing? then
-          let lspRange := Lean.FileMap.utf8RangeToLspRange inputCtx.fileMap range
-          let id ← generateTheoremId filePath name.toString lspRange.start.line
-          let thm : Theorem := {
-            id := id
-            label := name.toString
-            path := filePath
-            range := {
-              startLine := lspRange.start.line
-              startCharacter := lspRange.start.character
-              endLine := lspRange.end.line
-              endCharacter := lspRange.end.character
-            }
-          }
+          let thm ← mkTheoremFromRange inputCtx filePath name.toString range
           acc := acc.push thm
+    else if let some range := stx.getRangeWithTrailing? then
+      let cmdText := content.extract range.start range.stop
+      if let some label := commandTheoremLabel? cmdText then
+        let thm ← mkTheoremFromRange inputCtx filePath label range
+        acc := acc.push thm
 
   if headerMessages.hasErrors then
     headerMessages.forM fun msg => do
