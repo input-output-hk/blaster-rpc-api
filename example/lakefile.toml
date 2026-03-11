@@ -7,6 +7,6 @@ name = "AfvExample"
 root = "AfvExample"
 
 [[require]]
-name = "Solver"
+name = "Blaster"
 git = "https://github.com/input-output-hk/Lean-blaster"
-rev = "staging"
+rev = "feat/multilogging-support"
