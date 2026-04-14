@@ -28,6 +28,7 @@ def sendNotification {α : Type} [ToJson α] (method : String) (params : α) : S
     param := params
   }
   ctx.hOut.writeLspNotification notif
+  ctx.hOut.flush
 
 /-- Send a successful response to the client. -/
 def sendResponse {α : Type} [ToJson α] (id : RequestID) (result : α) : ServerM Unit := do
@@ -37,6 +38,7 @@ def sendResponse {α : Type} [ToJson α] (id : RequestID) (result : α) : Server
     result := result
   }
   ctx.hOut.writeLspResponse response
+  ctx.hOut.flush
 
 /-- Send an error response to the client. -/
 def sendError (id : RequestID) (code : ErrorCode) (message : String) : ServerM Unit := do
@@ -47,11 +49,11 @@ def sendError (id : RequestID) (code : ErrorCode) (message : String) : ServerM U
     message := message
   }
   ctx.hOut.writeLspResponseError errorResp
+  ctx.hOut.flush
 
 /-- Handle initializeWorkspace notification. -/
 def handleInitializeWorkspace (params : WorkspaceParams) : ServerM Unit := do
   let ctx ← read
-
   -- Scan all workspace paths
   let workspaces ← Workspace.scanWorkspaces params.workspacePaths
 
@@ -206,5 +208,10 @@ partial def serverLoop : ServerM Unit := do
       -- We don't send requests, so we shouldn't receive error responses
       IO.eprintln "Warning: Received unexpected error response message"
       serverLoop
+
+/-- Entry point: signals readiness then enters the main loop. -/
+def serverStart : ServerM Unit := do
+  sendNotification "serverReady" Json.null
+  serverLoop
 
 end AfvRpcApi.Server

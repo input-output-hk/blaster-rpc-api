@@ -1,18 +1,10 @@
 import AfvRpcApi.Types
 import AfvRpcApi.State
+import AfvRpcApi.Workspace
 import Std.Data.HashMap
 import Std.Data.HashSet
 import Lean.Data.Lsp
-import Lean.Parser.Module
-import Lean.Elab.Command
-import Lean.Elab.Import
-import Lean.Language.Lean
-import Lake.Config.InstallPath
-import Lake.Config.Env
-import Lake.Load.Config
-import Lake.Load.Workspace
-import Lake.Util.Log
-import Std.Internal.Async.System
+import Lean.Data.Json
 
 namespace AfvRpcApi.TheoremRunner
 
@@ -55,105 +47,115 @@ private def theoremRangeToLsp (r : Range) : Lsp.Range :=
   { start := { line := r.startLine, character := r.startCharacter }
     «end» := { line := r.endLine, character := r.endCharacter } }
 
-private def messageRange (msg : Message) : Lsp.Range :=
-  let start := toLspPos msg.pos
-  let stop := toLspPos (msg.endPos.getD msg.pos)
-  normalizeRange { start := start, «end» := stop }
+private structure LeanJsonPos where
+  line : Nat
+  column : Nat
+  deriving FromJson
 
-private def diagnosticFromMessage (msg : Message) : IO (String × Json) := do
-  let severity :=
-    match msg.severity with
-    | .error => "error"
-    | .warning => "warning"
-    | .information => "information"
-  let range := messageRange msg
-  let messageText ← msg.toString
-  let key := s!"{severity}|{range.start.line}|{range.start.character}|{range.end.line}|{range.end.character}|{messageText}"
+private structure DiagnosticEntry where
+  fileName : String
+  severity : String
+  message : String
+  range : Lsp.Range
+
+private def diagnosticFromEntry (diag : DiagnosticEntry) : String × Json :=
+  let key := s!"{diag.severity}|{diag.range.start.line}|{diag.range.start.character}|{diag.range.end.line}|{diag.range.end.character}|{diag.message}"
   let json := Json.mkObj [
-    ("severity", Json.str severity),
-    ("message", Json.str messageText),
+    ("severity", Json.str diag.severity),
+    ("message", Json.str diag.message),
     ("range", Json.mkObj [
-      ("startLine", Json.num (range.start.line.succ)),
-      ("startCharacter", Json.num range.start.character),
-      ("endLine", Json.num (range.end.line.succ)),
-      ("endCharacter", Json.num range.end.character)
+      ("startLine", Json.num (diag.range.start.line.succ)),
+      ("startCharacter", Json.num diag.range.start.character),
+      ("endLine", Json.num (diag.range.end.line.succ)),
+      ("endCharacter", Json.num diag.range.end.character)
     ])
   ]
-  return (key, json)
+  (key, json)
 
-private def normalizeProofText (text : String) : String :=
-  String.mk (text.toList.filter (fun c => !c.isWhitespace))
-
-private def isExactBySorry (text : String) : Bool :=
-  normalizeProofText text == "bysorry"
-
-private def replaceRange (content : String) (range : String.Range) (replacement : String) : String :=
-  (content.extract ⟨0⟩ range.start) ++ replacement ++ (content.extract range.stop content.endPos)
-
-private partial def findFirstBySorryRange (content : String) (stx : Syntax) : Option String.Range :=
-  let range? := stx.getRange? |>.orElse (fun _ => stx.getRangeWithTrailing?)
-  let foundInThis :=
-    if stx.isOfKind ``Lean.Parser.Term.byTactic then
-      match range? with
-      | some range =>
-        let text := content.extract range.start range.stop
-        if isExactBySorry text then some range else none
-      | none => none
-    else
-      none
-  match foundInThis with
-  | some range => some range
-  | none =>
-    stx.getArgs.foldl
-      (fun acc child =>
-        match acc with
-        | some _ => acc
-        | none => findFirstBySorryRange content child)
-      none
+private def parseLeanJsonDiagnosticLine? (line : String) : Option DiagnosticEntry := do
+  let json <- (Json.parse line).toOption
+  let fileName : String <- (json.getObjValAs? String "fileName").toOption
+  let severity : String <- (json.getObjValAs? String "severity").toOption
+  let message : String <- (json.getObjValAs? String "data").toOption
+  let pos : LeanJsonPos <- (json.getObjValAs? LeanJsonPos "pos").toOption
+  let endPos : Option LeanJsonPos :=
+    match json.getObjVal? "endPos" with
+    | Except.ok Json.null => none
+    | Except.ok endJson => (fromJson? endJson).toOption
+    | Except.error _ => none
+  let startLine := if pos.line == 0 then 0 else pos.line - 1
+  let endRaw := endPos.getD pos
+  let endLine := if endRaw.line == 0 then 0 else endRaw.line - 1
+  let range : Lsp.Range := {
+    start := { line := startLine, character := pos.column }
+    «end» := { line := endLine, character := endRaw.column }
+  }
+  some {
+    fileName := fileName
+    severity := severity
+    message := message
+    range := normalizeRange range
+  }
 
 private def rewriteBySorryInTheorem (path : String) (theoremRange : Range) : IO String := do
-  let content ← IO.FS.readFile path
-  try
-    let inputCtx := Parser.mkInputContext content path
-    let (header, _, headerMessages) ← Parser.parseHeader inputCtx
-    if headerMessages.hasErrors then
-      return content
-    let opts := Elab.inServer.set {} true
-    let opts := Elab.async.setIfNotSet opts true
-    let (env, _) ← Elab.processHeader header opts headerMessages inputCtx
-    let moduleStx ← Parser.testParseModule env path content
-    let targetRange := theoremRangeToLsp theoremRange
-    let cmds :=
-      match moduleStx.raw.getArgs[1]? with
-      | some cmdsStx => cmdsStx.getArgs
-      | none => #[]
-    for stx in cmds.toList do
-      if let some range := stx.getRangeWithTrailing? then
-        let lspRange := Lean.FileMap.utf8RangeToLspRange inputCtx.fileMap range
-        if rangesIntersect lspRange targetRange then
-          match findFirstBySorryRange content stx with
-          | some byRange =>
-            return replaceRange content byRange "by blaster"
-          | none =>
-            return content
-    return content
-  catch _ =>
-    return content
+  let _ := theoremRange
+  IO.FS.readFile path
 
-private def collectFileMessagesForTheorem (path : String) (theoremRange : Range) : IO (Array Message) := do
+private def collectFileDiagnosticsForTheorem (path : String) (theoremRange : Range) : IO (Array DiagnosticEntry) := do
   let content ← rewriteBySorryInTheorem path theoremRange
-  let inputCtx := Parser.mkInputContext content path
-  let (header, parserState, headerMessages) ← Parser.parseHeader inputCtx
-  let opts := Elab.inServer.set {} true
-  let opts := Elab.async.setIfNotSet opts true
-  let (env, headerMessages) ← Elab.processHeader header opts headerMessages inputCtx
-  let cmdState := Elab.Command.mkState env headerMessages opts
-  let task ← Language.Lean.processCommands inputCtx parserState cmdState
-  let snap := task.get
-  let messages := Language.toSnapshotTree snap
-    |>.getAll.map (·.diagnostics.msgLog)
-    |>.foldl (· ++ ·) {}
-  return messages.reportedPlusUnreported.toArray
+  let root ←
+    match ← Workspace.findWorkspaceRoot (FilePath.mk path) with
+    | some r => pure r.toString
+    | none =>
+      let parent := (FilePath.mk path).parent.getD (FilePath.mk path)
+      pure parent.toString
+  let tmpName :=
+    let stem := (FilePath.mk path).fileStem.getD "AfvTmp"
+    s!"{stem}.afvtmp.lean"
+  let originalDir := (FilePath.mk path).parent.getD (FilePath.mk root)
+  let tmpPath := originalDir / tmpName
+  IO.FS.writeFile tmpPath content
+  let out ←
+    try
+      IO.Process.output {
+        cmd := "lake"
+        args := #["env", "lean", "--json", tmpPath.toString]
+        cwd := some (FilePath.mk root)
+      }
+    finally
+      try
+        IO.FS.removeFile tmpPath
+      catch _ =>
+        pure ()
+  let combinedOutput :=
+    if out.stderr.isEmpty then out.stdout else out.stdout ++ "\n" ++ out.stderr
+  let mut diags : Array DiagnosticEntry := #[]
+  for line in combinedOutput.splitOn "\n" do
+    if let some diag := parseLeanJsonDiagnosticLine? line then
+      diags := diags.push { diag with fileName := path }
+  if diags.isEmpty then
+    let fallbackRange := theoremRangeToLsp theoremRange
+    for line in combinedOutput.splitOn "\n" do
+      let trimmed := line.trim
+      if !trimmed.isEmpty then
+        let severity :=
+          if trimmed.contains '"' && trimmed.contains 'e' then
+            if trimmed.startsWith "{" then
+              match (Json.parse trimmed).toOption with
+              | some j =>
+                match (j.getObjValAs? String "severity").toOption with
+                | some s => s
+                | none => "information"
+              | none => "information"
+            else "information"
+          else "information"
+        diags := diags.push {
+          fileName := path
+          severity := severity
+          message := trimmed
+          range := fallbackRange
+        }
+  return diags
 
 private def resolveWorkspaceRoot (workspaces : Array Workspace) (path : String) : Option String :=
   workspaces.foldl
@@ -167,83 +169,63 @@ private def resolveWorkspaceRoot (workspaces : Array Workspace) (path : String) 
         best)
     none
 
-private def loadWorkspaceSearchPath (root : String) : IO (Option SearchPath) := do
-  let toolchainFile := FilePath.mk root / "lean-toolchain"
-  let mut prevToolchain? : Option String := none
-  if ← toolchainFile.pathExists then
-    prevToolchain? ← IO.getEnv "ELAN_TOOLCHAIN"
-    let toolchain := (← IO.FS.readFile toolchainFile).trim
-    if !toolchain.isEmpty then
-      Std.Internal.IO.Async.System.setEnvVar "ELAN_TOOLCHAIN" toolchain
-  let envSysroot? ← try
-    let sysroot ← Lean.findSysroot
-    let lean ← Lake.LeanInstall.get sysroot (collocated := true)
-    let lake := Lake.LakeInstall.ofLean lean
-    let elan? ← Lake.findElanInstall?
-    let envResult ← Lake.Env.compute lake lean elan? |>.toIO'
-    match envResult with
-    | Except.ok env =>
-      pure (some env)
-    | Except.error err =>
-      IO.eprintln s!"Error computing Lake environment via sysroot: {err}"
-      pure none
-  catch _ =>
-    pure none
-  let env? ← match envSysroot? with
-  | some env =>
-    pure (some env)
-  | none =>
-    let (elan?, lean?, lake?) ← Lake.findInstall?
-    match lean?, lake? with
-    | some lean, some lake =>
-      let envResult ← Lake.Env.compute lake lean elan? |>.toIO'
-      match envResult with
-      | Except.ok env => pure (some env)
-      | Except.error err =>
-        IO.eprintln s!"Error computing Lake environment via install detection: {err}"
-        pure none
-    | _, _ =>
-      IO.eprintln "Error: Unable to locate Lean/Lake installation"
-      pure none
-  match prevToolchain? with
-  | some value => Std.Internal.IO.Async.System.setEnvVar "ELAN_TOOLCHAIN" value
-  | none => Std.Internal.IO.Async.System.unsetEnvVar "ELAN_TOOLCHAIN"
-  match env? with
-  | none =>
-    return none
-  | some env =>
-    let config : Lake.LoadConfig := {
-      lakeEnv := env
-      wsDir := FilePath.mk root
-    }
-    let ws? ← Lake.loadWorkspace config |>.toBaseIO (minLv := .error) (ansiMode := .auto) (out := .stderr)
-    match ws? with
-    | none =>
-      IO.eprintln s!"Error loading Lake workspace at {root}"
-      return none
-    | some ws =>
-      return some ws.augmentedLeanPath
+private def loadWorkspaceSearchPath (root : String) : IO (Option SearchPath) :=
+  Workspace.loadWorkspaceSearchPath (FilePath.mk root)
 
-private def getFileMessagesCached
-    (cacheRef : IO.Ref (HashMap String (Array Message)))
+private def ensureToolchainSearchPath (path : String) : IO Unit := do
+  if let some root ← Workspace.findWorkspaceRoot (FilePath.mk path) then
+    if let some sysroot ← Workspace.findWorkspaceSysroot root then
+      Lean.initSearchPath sysroot
+
+private def getFileDiagnosticsCached
+    (cacheRef : IO.Ref (HashMap String (Array DiagnosticEntry)))
     (path : String)
-    (theoremRange : Range) : IO (Array Message) := do
+    (theoremRange : Range) : IO (Array DiagnosticEntry) := do
   let cacheKey :=
     s!"{path}::{theoremRange.startLine}:{theoremRange.startCharacter}-{theoremRange.endLine}:{theoremRange.endCharacter}"
   let cache ← cacheRef.get
   match cache.get? cacheKey with
-  | some msgs =>
-    return msgs
+  | some diags =>
+    return diags
   | none =>
-    let msgs ← collectFileMessagesForTheorem path theoremRange
-    cacheRef.modify (·.insert cacheKey msgs)
-    return msgs
+    let diags ← collectFileDiagnosticsForTheorem path theoremRange
+    cacheRef.modify (·.insert cacheKey diags)
+    return diags
+
+private def findNextTheoremStartLine
+    (results : HashMap String TheoremResult)
+    (path : String)
+    (startLine : Nat) : Option Nat :=
+  results.toList.foldl
+    (fun best (_, r) =>
+      if r.theorem.path == path && r.theorem.range.startLine > startLine then
+        match best with
+        | none => some r.theorem.range.startLine
+        | some current => some (Nat.min current r.theorem.range.startLine)
+      else
+        best)
+    none
+
+private def diagnosticBelongsToTheorem
+    (theoremRange : Lsp.Range)
+    (nextStartLine? : Option Nat)
+    (diagRange : Lsp.Range) : Bool :=
+  if rangesIntersect theoremRange diagRange then
+    true
+  else
+    let line := diagRange.start.line
+    let afterStart := line >= theoremRange.start.line
+    let beforeNext :=
+      match nextStartLine? with
+      | some nextLine => line < nextLine
+      | none => true
+    afterStart && beforeNext
 
 /-- Run verification for a single theorem.
     Updates state and invokes callback with result when complete. -/
 def runTheoremVerificationWithCache
     (state : State.StateRef)
-    (cacheRef : IO.Ref (HashMap String (Array Message)))
+    (cacheRef : IO.Ref (HashMap String (Array DiagnosticEntry)))
     (theoremId : String)
     (onComplete : TheoremResult → IO Unit) : IO Unit := do
   -- Get the theorem from state
@@ -258,6 +240,7 @@ def runTheoremVerificationWithCache
     let startTime ← IO.monoMsNow
     let (status, details) ← try
       let path := result.«theorem».path
+      ensureToolchainSearchPath path
       let pathReal ← IO.FS.realPath path
       let workspaces ← State.getWorkspaces state
       let workspaceRoot? := resolveWorkspaceRoot workspaces path
@@ -278,21 +261,24 @@ def runTheoremVerificationWithCache
               pure none
       match searchPath? with
       | some sp =>
-        Lean.searchPathRef.set sp
+        let current ← Lean.searchPathRef.get
+        Lean.searchPathRef.set (current ++ sp)
       | none =>
         IO.eprintln s!"Warning: No workspace context for {path}"
       let theoremRange := theoremRangeToLsp result.«theorem».range
-      let msgs ← getFileMessagesCached cacheRef path result.theorem.range
-      let mut relevantMsgs : Array Message := #[]
-      for msg in msgs do
-        let msgPathReal ← IO.FS.realPath msg.fileName
-        if msgPathReal == pathReal && rangesIntersect theoremRange (messageRange msg) then
-          relevantMsgs := relevantMsgs.push msg
-      let hasError := relevantMsgs.any (·.severity == .error)
+      let allResults ← State.getAllResults state
+      let nextStartLine? := findNextTheoremStartLine allResults path result.theorem.range.startLine
+      let diags ← getFileDiagnosticsCached cacheRef path result.theorem.range
+      let mut relevantDiags : Array DiagnosticEntry := #[]
+      for diag in diags do
+        let msgPathReal ← IO.FS.realPath diag.fileName
+        if msgPathReal == pathReal && diagnosticBelongsToTheorem theoremRange nextStartLine? diag.range then
+          relevantDiags := relevantDiags.push diag
+      let hasError := relevantDiags.any (·.severity == "error")
       let mut seen : HashSet String := {}
       let mut diagnosticArr : Array Json := #[]
-      for msg in relevantMsgs do
-        let (key, diagnostic) ← diagnosticFromMessage msg
+      for diag in relevantDiags do
+        let (key, diagnostic) := diagnosticFromEntry diag
         if !seen.contains key then
           seen := seen.insert key
           diagnosticArr := diagnosticArr.push diagnostic
@@ -320,7 +306,7 @@ def runTheoremsSequentially
     (state : State.StateRef)
     (theoremIds : Array String)
     (onComplete : TheoremResult → IO Unit) : IO Unit := do
-  let cacheRef ← IO.mkRef ({} : HashMap String (Array Message))
+  let cacheRef ← IO.mkRef ({} : HashMap String (Array DiagnosticEntry))
   for theoremId in theoremIds do
     runTheoremVerificationWithCache state cacheRef theoremId onComplete
 

@@ -20,7 +20,7 @@ def main : IO UInt32 := do
     }
 
     -- Run server loop
-    ReaderT.run Server.serverLoop ctx
+    ReaderT.run Server.serverStart ctx
 
     return 0
   catch e =>

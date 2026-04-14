@@ -69,12 +69,17 @@ read_msg() {
   local len=""
   while IFS= read -r line <&4; do
     line=${line%$'\r'}
-    if [[ -z "${line}" ]]; then
+    if [[ -z "${line}" && -n "${len}" ]]; then
       break
     fi
     if [[ "${line}" == Content-Length:* ]]; then
       len=${line#Content-Length: }
       len=${len//[[:space:]]/}
+      continue
+    fi
+
+    if [[ -z "${len}" && -n "${line}" ]]; then
+      continue
     fi
   done
 
@@ -83,7 +88,7 @@ read_msg() {
   fi
 
   local body=""
-  IFS= read -r -n "${len}" body <&4
+  LC_ALL=C IFS= read -r -n "${len}" body <&4
   printf '%s' "${body}"
 }
 
@@ -94,8 +99,13 @@ exit_json='{"jsonrpc":"2.0","method":"exit","params":null}'
 send_msg "${init_json}"
 send_msg "${workspace_json}"
 
+ready_response=$(read_msg)
 notification_response=$(read_msg)
 workspace_response=$(read_msg)
+
+printf '> Received notification:\n' >&2
+pretty_print "${ready_response}"
+printf '\n' >&2
 
 printf '> Received notification:\n' >&2
 pretty_print "${notification_response}"
@@ -108,8 +118,8 @@ printf '\n' >&2
 theorem_id=$(printf '%s' "${workspace_response}" | "${PYTHON}" -c '
 import json, sys
 
-TARGET_PATH = "example/AfvExample/Test1.lean"
-TARGET_LABEL = "example_invalid_theorem"
+TARGET_PATH = "example/AfvExample/Test2.lean"
+TARGET_LABEL = "example_theorem_1"
 
 def find_theorem_id(node_or_nodes):
   if isinstance(node_or_nodes, list):
@@ -140,7 +150,7 @@ print(found or "")
 ')
 
 if [[ -z "${theorem_id}" ]]; then
-  echo "Error: example_invalid_theorem not found in Test1.lean" >&2
+  echo "Error: example_theorem_1 not found in Test2.lean" >&2
   send_msg "${exit_json}"
   exit 1
 fi

@@ -8,3 +8,8 @@ name = "AfvRpcApi"
 [[lean_exe]]
 name = "afv-rpc-api"
 root = "Main"
+# Windows only: required so the Lean interpreter can resolve native symbols (e.g. UInt64.ofNatLT)
+# at runtime when calling Lake.loadWorkspace. On macOS/Linux this is not needed as symbol
+# visibility works differently. When enabling this on Windows, the Lean shared DLLs
+# (libleanshared*.dll, libLake_shared.dll, etc.) must be distributed alongside the binary.
+# supportInterpreter = true
