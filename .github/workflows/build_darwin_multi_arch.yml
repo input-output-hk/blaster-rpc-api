@@ -1,0 +1,39 @@
+name: Build Darwin Multi-Arch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-darwin-multi-arch:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install elan
+        run: curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+
+      - name: Add elan to PATH
+        run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Cache elan and lake
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            api/.lake
+          key: ${{ runner.os }}-elan-${{ hashFiles('api/lean-toolchain', 'api/lake-manifest.json', 'api/lakefile.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-elan-
+
+      - name: Run Darwin multi-arch build script
+        run: bash scripts/build-darwin-multi-arch.sh
+
+      - name: Upload Darwin binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: afv-rpc-api-darwin-binaries
+          path: |
+            dist/afv-rpc-api-darwin-arm64
+            dist/afv-rpc-api-darwin-x64
+          if-no-files-found: error
