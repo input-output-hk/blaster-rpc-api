@@ -1,0 +1,29 @@
+name: Build Linux Multi-Arch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-linux-multi-arch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run Linux multi-arch build script
+        run: bash scripts/build-linux-multi-arch.sh
+
+      - name: Upload Linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: afv-rpc-api-linux-binaries
+          path: |
+            dist/afv-rpc-api-linux-x64
+            dist/afv-rpc-api-linux-arm64
+          if-no-files-found: error

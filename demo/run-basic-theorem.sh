@@ -69,12 +69,17 @@ read_msg() {
   local len=""
   while IFS= read -r line <&4; do
     line=${line%$'\r'}
-    if [[ -z "${line}" ]]; then
+    if [[ -z "${line}" && -n "${len}" ]]; then
       break
     fi
     if [[ "${line}" == Content-Length:* ]]; then
       len=${line#Content-Length: }
       len=${len//[[:space:]]/}
+      continue
+    fi
+
+    if [[ -z "${len}" && -n "${line}" ]]; then
+      continue
     fi
   done
 
@@ -83,7 +88,7 @@ read_msg() {
   fi
 
   local body=""
-  IFS= read -r -n "${len}" body <&4
+  LC_ALL=C IFS= read -r -n "${len}" body <&4
   printf '%s' "${body}"
 }
 
@@ -94,8 +99,13 @@ exit_json='{"jsonrpc":"2.0","method":"exit","params":null}'
 send_msg "${init_json}"
 send_msg "${workspace_json}"
 
+ready_response=$(read_msg)
 notification_response=$(read_msg)
 workspace_response=$(read_msg)
+
+printf '> Received notification:\n' >&2
+pretty_print "${ready_response}"
+printf '\n' >&2
 
 printf '> Received notification:\n' >&2
 pretty_print "${notification_response}"

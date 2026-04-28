@@ -1,8 +1,5 @@
 import AfvRpcApi.Types
 import Std.Data.HashMap
-import Lean.Parser.Module
-import Lean.Elab.DeclModifiers
-import Lean.Elab.Import
 import Lake.Config.InstallPath
 import Lake.Config.Env
 import Lake.Load.Config
@@ -16,7 +13,7 @@ namespace AfvRpcApi.Workspace
 open AfvRpcApi
 open System (FilePath)
 
-private def findWorkspaceRoot (path : FilePath) : IO (Option FilePath) := do
+def findWorkspaceRoot (path : FilePath) : IO (Option FilePath) := do
   let mut current :=
     if (← path.isDir) then path else path.parent.getD path
   let root := current
@@ -31,62 +28,53 @@ private def findWorkspaceRoot (path : FilePath) : IO (Option FilePath) := do
     current := parent
   return none
 
-private def loadWorkspaceSearchPath (root : FilePath) : IO (Option System.SearchPath) := do
+def findWorkspaceSysroot (root : FilePath) : IO (Option FilePath) := do
+  -- Read lean-toolchain to get the workspace's toolchain version
   let toolchainFile := root / "lean-toolchain"
-  let mut prevToolchain? : Option String := none
   if ← toolchainFile.pathExists then
-    prevToolchain? ← IO.getEnv "ELAN_TOOLCHAIN"
     let toolchain := (← IO.FS.readFile toolchainFile).trim
-    if !toolchain.isEmpty then
-      Std.Internal.IO.Async.System.setEnvVar "ELAN_TOOLCHAIN" toolchain
-  let envSysroot? ← try
-    let sysroot ← Lean.findSysroot
-    let lean ← Lake.LeanInstall.get sysroot (collocated := true)
-    let lake := Lake.LakeInstall.ofLean lean
-    let elan? ← Lake.findElanInstall?
-    let envResult ← Lake.Env.compute lake lean elan? |>.toIO'
-    match envResult with
-    | Except.ok env =>
-      pure (some env)
-    | Except.error err =>
-      IO.eprintln s!"Error computing Lake environment via sysroot: {err}"
-      pure none
-  catch _ =>
-    pure none
-  let env? ← match envSysroot? with
-  | some env =>
-    pure (some env)
-  | none =>
-    let (elan?, lean?, lake?) ← Lake.findInstall?
-    match lean?, lake? with
-    | some lean, some lake =>
-      let envResult ← Lake.Env.compute lake lean elan? |>.toIO'
-      match envResult with
-      | Except.ok env => pure (some env)
-      | Except.error err =>
-        IO.eprintln s!"Error computing Lake environment via install detection: {err}"
-        pure none
-    | _, _ =>
-      IO.eprintln "Error: Unable to locate Lean/Lake installation"
-      pure none
-  match prevToolchain? with
-  | some value => Std.Internal.IO.Async.System.setEnvVar "ELAN_TOOLCHAIN" value
-  | none => Std.Internal.IO.Async.System.unsetEnvVar "ELAN_TOOLCHAIN"
-  match env? with
-  | none =>
+    -- Convert "leanprover/lean4:v4.24.0" -> "leanprover--lean4---v4.24.0"
+    let dirName := toolchain.replace "/" "--" |>.replace ":" "---"
+    let elanHome ←
+      if let some h ← IO.getEnv "ELAN_HOME" then pure (FilePath.mk h)
+      else if let some h ← IO.getEnv "USERPROFILE" then pure (FilePath.mk h / ".elan")
+      else if let some h ← IO.getEnv "HOME" then pure (FilePath.mk h / ".elan")
+      else return none
+    let toolchainPath := elanHome / "toolchains" / dirName
+    if ← toolchainPath.pathExists then
+      return some toolchainPath
+  -- Fall back to current binary's sysroot
+  try return some (← Lean.findSysroot)
+  catch _ => return none
+
+def loadWorkspaceSearchPath (root : FilePath) : IO (Option System.SearchPath) := do
+  let lakeDir := root / ".lake"
+  let mut paths : System.SearchPath := []
+
+  -- Add Lean toolchain stdlib matching the workspace's toolchain version
+  if let some sysroot ← findWorkspaceSysroot root then
+    Lean.initSearchPath sysroot
+    let sysrootLib := sysroot / "lib" / "lean"
+    if ← sysrootLib.pathExists then
+      paths := paths.append [sysrootLib.toString]
+
+  -- Add main project build output
+  let buildLib := lakeDir / "build" / "lib" / "lean"
+  if ← buildLib.pathExists then
+    paths := paths.append [buildLib.toString]
+  else
+    IO.eprintln s!"Warning: {buildLib} not found. Run 'lake build' in {root} first."
     return none
-  | some env =>
-    let config : Lake.LoadConfig := {
-      lakeEnv := env
-      wsDir := root
-    }
-    let ws? ← Lake.loadWorkspace config |>.toBaseIO (minLv := .error) (ansiMode := .auto) (out := .stderr)
-    match ws? with
-    | none =>
-      IO.eprintln s!"Error loading Lake workspace at {root}"
-      return none
-    | some ws =>
-      return some ws.augmentedLeanPath
+
+  -- Add all package build outputs
+  let packagesDir := lakeDir / "packages"
+  if ← packagesDir.pathExists then
+    for entry in ← packagesDir.readDir do
+      let pkgBuildLib := entry.path / ".lake" / "build" / "lib" / "lean"
+      if ← pkgBuildLib.pathExists then
+        paths := paths.append [pkgBuildLib.toString]
+
+  return some paths
 
 /-- Global counter for generating unique theorem IDs. -/
 initialize idCounterRef : IO.Ref Nat ← IO.mkRef 0
@@ -117,78 +105,51 @@ private def commandTheoremLabel? (cmdText : String) : Option String :=
   else
     none
 
-private def mkTheoremFromRange
-    (inputCtx : Lean.Parser.InputContext)
+private def theoremNameFromLine? (line : String) : Option String :=
+  let trimmed := line.trimLeft
+  if !trimmed.startsWith "theorem " then
+    none
+  else
+    let rest := trimmed.drop 8
+    let name :=
+      rest.takeWhile fun c =>
+        c.isAlphanum || c == '_' || c == '\''
+    if name.isEmpty then none else some name
+
+private def mkTheoremFromLine
     (filePath : String)
     (label : String)
-    (range : String.Range) : IO Theorem := do
-  let lspRange := Lean.FileMap.utf8RangeToLspRange inputCtx.fileMap range
-  let id ← generateTheoremId filePath label lspRange.start.line
+    (lineIdx : Nat)
+    (lineText : String) : IO Theorem := do
+  let id ← generateTheoremId filePath label lineIdx
   return {
     id := id
     label := label
     path := filePath
     range := {
-      startLine := lspRange.start.line
-      startCharacter := lspRange.start.character
-      endLine := lspRange.end.line
-      endCharacter := lspRange.end.character
+      startLine := lineIdx
+      startCharacter := 0
+      endLine := lineIdx
+      endCharacter := lineText.length
     }
   }
 
-/-- Extract theorems from file content using Lean's parser. -/
-def extractTheorems (filePath : String) (content : String) : IO (Array Theorem) := do
-  let inputCtx := Lean.Parser.mkInputContext content filePath
-  let theorems := #[]
-
-  match ← findWorkspaceRoot (FilePath.mk filePath) with
-  | some root =>
-    let sp? ← loadWorkspaceSearchPath root
-    match sp? with
-    | some sp => Lean.searchPathRef.set sp
-    | none =>
-      IO.eprintln s!"Warning: Unable to load workspace search path for {root}"
-  | none =>
-    IO.eprintln s!"Warning: No lakefile.toml found for {filePath}"
-
-  let (header, parserState, headerMessages) ← Lean.Parser.parseHeader inputCtx
-  if headerMessages.hasErrors then
-    headerMessages.forM fun msg => do
-      let rendered ← msg.toString
-      IO.eprintln s!"Warning: Failed to parse header for {filePath}: {rendered}"
-    return theorems
-
-  let opts := Lean.Elab.inServer.set {} true
-  let opts := Lean.Elab.async.setIfNotSet opts true
-  let (env, headerMessages) ← Lean.Elab.processHeader header opts headerMessages inputCtx
-  let moduleStx ← Lean.Parser.testParseModule env filePath content
-  let mut acc := theorems
-  let cmds :=
-    match moduleStx.raw.getArgs[1]? with
-    | some cmdsStx => cmdsStx.getArgs
-    | none => #[]
-
-  for stx in cmds.toList do
-    if stx.isOfKind ``Lean.Parser.Command.declaration then
-      let decl := stx[1]
-      if decl.getKind == ``Lean.Parser.Command.theorem then
-        let declId := decl[1]
-        let (name, _) := Lean.Elab.expandDeclIdCore declId
-        if let some range := stx.getRangeWithTrailing? then
-          let thm ← mkTheoremFromRange inputCtx filePath name.toString range
-          acc := acc.push thm
-    else if let some range := stx.getRangeWithTrailing? then
-      let cmdText := content.extract range.start range.stop
-      if let some label := commandTheoremLabel? cmdText then
-        let thm ← mkTheoremFromRange inputCtx filePath label range
-        acc := acc.push thm
-
-  if headerMessages.hasErrors then
-    headerMessages.forM fun msg => do
-      let rendered ← msg.toString
-      IO.eprintln s!"Warning: Parse issue in {filePath}: {rendered}"
-
+private def extractTheoremsFallback (filePath : String) (content : String) : IO (Array Theorem) := do
+  let mut acc := #[]
+  let lines := content.splitOn "\n"
+  for h : i in [:lines.length] do
+    let line := lines[i]
+    if let some label := theoremNameFromLine? line then
+      let thm ← mkTheoremFromLine filePath label i line
+      acc := acc.push thm
+    else if let some label := commandTheoremLabel? line then
+      let thm ← mkTheoremFromLine filePath label i line
+      acc := acc.push thm
   return acc
+
+/-- Extract theorems from file content using line-based scanning. -/
+def extractTheorems (filePath : String) (content : String) : IO (Array Theorem) := do
+  extractTheoremsFallback filePath content
 
 /-- Scan a single .lean file for theorems.
     Returns None if the file cannot be read or is not a valid UTF-8 file. -/
