@@ -1,0 +1,75 @@
+name: Build Windows Multi-Arch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-win32-x64:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install elan
+        shell: bash
+        run: curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+
+      - name: Add elan to PATH
+        shell: bash
+        run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Cache elan and lake
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            api/.lake
+          key: ${{ runner.os }}-x64-elan-${{ hashFiles('api/lean-toolchain', 'api/lake-manifest.json', 'api/lakefile.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-x64-elan-
+
+      - name: Run Windows x64 build script
+        shell: bash
+        run: bash scripts/build-windows-multi-arch.sh x64
+
+      - name: Upload Windows x64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: afv-rpc-api-win32-x64
+          path: dist/afv-rpc-api-win32-x64.exe
+          if-no-files-found: error
+
+  build-win32-arm64:
+    runs-on: windows-11-arm
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install elan
+        shell: bash
+        run: curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+
+      - name: Add elan to PATH
+        shell: bash
+        run: echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Cache elan and lake
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            api/.lake
+          key: ${{ runner.os }}-arm64-elan-${{ hashFiles('api/lean-toolchain', 'api/lake-manifest.json', 'api/lakefile.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-arm64-elan-
+
+      - name: Run Windows arm64 build script
+        shell: bash
+        run: bash scripts/build-windows-multi-arch.sh arm64
+
+      - name: Upload Windows arm64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: afv-rpc-api-win32-arm64
+          path: dist/afv-rpc-api-win32-arm64.exe
+          if-no-files-found: error
