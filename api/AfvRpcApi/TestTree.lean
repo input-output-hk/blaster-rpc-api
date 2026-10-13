@@ -8,12 +8,12 @@ import Lake.Util.Log
 import Std.Internal.Async.System
 import Lean.Data.Lsp.Utf16
 
-namespace AfvRpcApi.Workspace
+namespace AfvRpcApi.TestTree
 
 open AfvRpcApi
 open System (FilePath)
 
-def findWorkspaceRoot (path : FilePath) : IO (Option FilePath) := do
+def findTestTreeRoot (path : FilePath) : IO (Option FilePath) := do
   let mut current :=
     if (← path.isDir) then path else path.parent.getD path
   let root := current
@@ -28,8 +28,8 @@ def findWorkspaceRoot (path : FilePath) : IO (Option FilePath) := do
     current := parent
   return none
 
-def findWorkspaceSysroot (root : FilePath) : IO (Option FilePath) := do
-  -- Read lean-toolchain to get the workspace's toolchain version
+def findTestTreeSysroot (root : FilePath) : IO (Option FilePath) := do
+  -- Read lean-toolchain to get the test tree's toolchain version
   let toolchainFile := root / "lean-toolchain"
   if ← toolchainFile.pathExists then
     let toolchain := (← IO.FS.readFile toolchainFile).trim
@@ -47,12 +47,12 @@ def findWorkspaceSysroot (root : FilePath) : IO (Option FilePath) := do
   try return some (← Lean.findSysroot)
   catch _ => return none
 
-def loadWorkspaceSearchPath (root : FilePath) : IO (Option System.SearchPath) := do
+def loadTestTreeSearchPath (root : FilePath) : IO (Option System.SearchPath) := do
   let lakeDir := root / ".lake"
   let mut paths : System.SearchPath := []
 
-  -- Add Lean toolchain stdlib matching the workspace's toolchain version
-  if let some sysroot ← findWorkspaceSysroot root then
+  -- Add Lean toolchain stdlib matching the test tree's toolchain version
+  if let some sysroot ← findTestTreeSysroot root then
     Lean.initSearchPath sysroot
     let sysrootLib := sysroot / "lib" / "lean"
     if ← sysrootLib.pathExists then
@@ -76,11 +76,11 @@ def loadWorkspaceSearchPath (root : FilePath) : IO (Option System.SearchPath) :=
 
   return some paths
 
-/-- Global counter for generating unique theorem IDs. -/
+/-- Global counter for generating unique test IDs. -/
 initialize idCounterRef : IO.Ref Nat ← IO.mkRef 0
 
-/-- Generate a unique theorem ID based on file path, label, and line number. -/
-def generateTheoremId (filePath : String) (label : String) (line : Nat) : IO String := do
+/-- Generate a unique test ID based on file path, label, and line number. -/
+def generateTestId (filePath : String) (label : String) (line : Nat) : IO String := do
   let counter ← idCounterRef.get
   idCounterRef.modify (· + 1)
   -- Create a simple hash-like ID
@@ -98,14 +98,14 @@ private def trimCommandLabel (cmdText : String) : String :=
     | [] => firstLine
   withoutComment.trim
 
-private def commandTheoremLabel? (cmdText : String) : Option String :=
+private def commandTestLabel? (cmdText : String) : Option String :=
   let label := trimCommandLabel cmdText
   if label.startsWith "#bmc" || label.startsWith "#kind" then
     some label
   else
     none
 
-private def theoremNameFromLine? (line : String) : Option String :=
+private def testNameFromLine? (line : String) : Option String :=
   let trimmed := line.trimLeft
   if !trimmed.startsWith "theorem " then
     none
@@ -116,12 +116,12 @@ private def theoremNameFromLine? (line : String) : Option String :=
         c.isAlphanum || c == '_' || c == '\''
     if name.isEmpty then none else some name
 
-private def mkTheoremFromLine
+private def mkTestFromLine
     (filePath : String)
     (label : String)
     (lineIdx : Nat)
-    (lineText : String) : IO Theorem := do
-  let id ← generateTheoremId filePath label lineIdx
+    (lineText : String) : IO Test := do
+  let id ← generateTestId filePath label lineIdx
   return {
     id := id
     label := label
@@ -134,39 +134,39 @@ private def mkTheoremFromLine
     }
   }
 
-private def extractTheoremsFallback (filePath : String) (content : String) : IO (Array Theorem) := do
+private def extractTestsFallback (filePath : String) (content : String) : IO (Array Test) := do
   let mut acc := #[]
   let lines := content.splitOn "\n"
   for h : i in [:lines.length] do
     let line := lines[i]
-    if let some label := theoremNameFromLine? line then
-      let thm ← mkTheoremFromLine filePath label i line
-      acc := acc.push thm
-    else if let some label := commandTheoremLabel? line then
-      let thm ← mkTheoremFromLine filePath label i line
-      acc := acc.push thm
+    if let some label := testNameFromLine? line then
+      let test ← mkTestFromLine filePath label i line
+      acc := acc.push test
+    else if let some label := commandTestLabel? line then
+      let test ← mkTestFromLine filePath label i line
+      acc := acc.push test
   return acc
 
-/-- Extract theorems from file content using line-based scanning. -/
-def extractTheorems (filePath : String) (content : String) : IO (Array Theorem) := do
-  extractTheoremsFallback filePath content
+/-- Extract tests from file content using line-based scanning. -/
+def extractTests (filePath : String) (content : String) : IO (Array Test) := do
+  extractTestsFallback filePath content
 
-/-- Scan a single .lean file for theorems.
+/-- Scan a single .lean file for tests.
     Returns None if the file cannot be read or is not a valid UTF-8 file. -/
 def scanFile (path : String) : IO (Option Node) := do
   try
     -- Read file content
     let content ← IO.FS.readFile path
 
-    -- Extract theorems
-    let theorems ← extractTheorems path content
+    -- Extract tests
+    let tests ← extractTests path content
 
-    -- Only include files with theorems
-    if theorems.isEmpty then
+    -- Only include files with tests
+    if tests.isEmpty then
       return none
 
     let fileName := (FilePath.mk path).fileName.getD path
-    return some (Node.file path fileName theorems)
+    return some (Node.file path fileName tests)
   catch e =>
     IO.eprintln s!"Warning: Failed to scan file {path}: {e}"
     return none
@@ -206,19 +206,19 @@ partial def scanFolder (path : String) : IO (Option Node) := do
     IO.eprintln s!"Warning: Failed to scan folder {path}: {e}"
     return none
 
-/-- Scan a workspace directory.
-    Returns None if the workspace cannot be read or contains no theorems. -/
-def scanWorkspace (path : String) : IO (Option Workspace) := do
+/-- Scan a test tree directory.
+    Returns None if the test tree cannot be read or contains no tests. -/
+def scanTestTree (path : String) : IO (Option TestTree) := do
   try
     let folderPath := FilePath.mk path
 
     -- Check if path exists and is a directory
     if !(← folderPath.pathExists) then
-      IO.eprintln s!"Warning: Workspace path does not exist: {path}"
+      IO.eprintln s!"Warning: Test tree path does not exist: {path}"
       return none
 
     if !(← folderPath.isDir) then
-      IO.eprintln s!"Warning: Workspace path is not a directory: {path}"
+      IO.eprintln s!"Warning: Test tree path is not a directory: {path}"
       return none
 
     -- Read directory entries
@@ -240,29 +240,29 @@ def scanWorkspace (path : String) : IO (Option Workspace) := do
           if let some fileNode ← scanFile entryPath then
             children := children.push fileNode
 
-    -- Only include workspace if it has children
+    -- Only include test tree if it has children
     if children.isEmpty then
-      IO.eprintln s!"Warning: Workspace contains no theorems: {path}"
+      IO.eprintln s!"Warning: Test tree contains no tests: {path}"
       return none
 
-    let workspaceName := folderPath.fileName.getD path
+    let testTreeName := folderPath.fileName.getD path
     return some {
       path := path
-      label := workspaceName
+      label := testTreeName
       children := children
     }
   catch e =>
-    IO.eprintln s!"Warning: Failed to scan workspace {path}: {e}"
+    IO.eprintln s!"Warning: Failed to scan test tree {path}: {e}"
     return none
 
-/-- Scan multiple workspace paths, filtering out failures. -/
-def scanWorkspaces (paths : Array String) : IO (Array Workspace) := do
-  let mut workspaces := #[]
+/-- Scan multiple test tree paths, filtering out failures. -/
+def scanTestTrees (paths : Array String) : IO (Array TestTree) := do
+  let mut testTrees := #[]
 
   for path in paths do
-    if let some workspace ← scanWorkspace path then
-      workspaces := workspaces.push workspace
+    if let some testTree ← scanTestTree path then
+      testTrees := testTrees.push testTree
 
-  return workspaces
+  return testTrees
 
-end AfvRpcApi.Workspace
+end AfvRpcApi.TestTree

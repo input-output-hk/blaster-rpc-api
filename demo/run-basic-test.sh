@@ -13,7 +13,7 @@ if [[ ! -x "${API_BIN}" ]]; then
 fi
 
 if [[ ! -d "${EXAMPLE_DIR}" ]]; then
-  echo "Error: example workspace not found at ${EXAMPLE_DIR}" >&2
+  echo "Error: example test tree not found at ${EXAMPLE_DIR}" >&2
   exit 1
 fi
 
@@ -92,39 +92,33 @@ read_msg() {
   printf '%s' "${body}"
 }
 
-init_json=$(printf '{"jsonrpc":"2.0","method":"initializeWorkspace","params":{"workspacePaths":["%s"]}}' "${EXAMPLE_DIR}")
-workspace_json='{"jsonrpc":"2.0","id":1,"method":"getWorkspace","params":null}'
+build_tree_json=$(printf '{"jsonrpc":"2.0","id":1,"method":"buildTestTree","params":{"testTreePaths":["%s"]}}' "${EXAMPLE_DIR}")
 exit_json='{"jsonrpc":"2.0","method":"exit","params":null}'
 
-send_msg "${init_json}"
-send_msg "${workspace_json}"
+send_msg "${build_tree_json}"
 
 ready_response=$(read_msg)
-notification_response=$(read_msg)
-workspace_response=$(read_msg)
+build_tree_response=$(read_msg)
+
 
 printf '> Received notification:\n' >&2
 pretty_print "${ready_response}"
 printf '\n' >&2
 
-printf '> Received notification:\n' >&2
-pretty_print "${notification_response}"
-printf '\n' >&2
-
 printf '> Received response:\n' >&2
-pretty_print "${workspace_response}"
+pretty_print "${build_tree_response}"
 printf '\n' >&2
 
-theorem_id=$(printf '%s' "${workspace_response}" | "${PYTHON}" -c '
+test_id=$(printf '%s' "${build_tree_response}" | "${PYTHON}" -c '
 import json, sys
 
-TARGET_PATH = "example/AfvExample/Test2.lean"
-TARGET_LABEL = "example_false_theorem"
+TARGET_PATH = "example/AfvExample/Test1.lean"
+TARGET_LABEL = "example_test_1"
 
-def find_theorem_id(node_or_nodes):
+def find_test_id(node_or_nodes):
   if isinstance(node_or_nodes, list):
     for node in node_or_nodes:
-      found = find_theorem_id(node)
+      found = find_test_id(node)
       if found:
         return found
     return None
@@ -133,35 +127,35 @@ def find_theorem_id(node_or_nodes):
   if node.get("type") == "file":
     path = node.get("path", "")
     if path.endswith(TARGET_PATH):
-      for thm in node.get("theorems", []):
-        if thm.get("label") == TARGET_LABEL:
-          return thm.get("id")
+      for test in node.get("tests", []):
+        if test.get("label") == TARGET_LABEL:
+          return test.get("id")
 
   for child in node.get("children", []):
-    found = find_theorem_id(child)
+    found = find_test_id(child)
     if found:
       return found
   return None
 
 data = json.load(sys.stdin)
-workspaces = data.get("result", [])
-found = find_theorem_id(workspaces)
+test_trees = data.get("result", [])
+found = find_test_id(test_trees)
 print(found or "")
 ')
 
-if [[ -z "${theorem_id}" ]]; then
-  echo "Error: example_false_theorem not found in Test2.lean" >&2
+if [[ -z "${test_id}" ]]; then
+  echo "Error: example_test_1 not found in Test1.lean" >&2
   send_msg "${exit_json}"
   exit 1
 fi
 
-theorem_json=$(printf '{"jsonrpc":"2.0","method":"runTheorem","params":{"theoremIds":["%s"]}}' "${theorem_id}")
-send_msg "${theorem_json}"
+test_json=$(printf '{"jsonrpc":"2.0","method":"runTest","params":{"testIds":["%s"]}}' "${test_id}")
+send_msg "${test_json}"
 
-theorem_response=$(read_msg)
+test_response=$(read_msg)
 
 printf '> Received notification:\n' >&2
-pretty_print "${theorem_response}"
+pretty_print "${test_response}"
 printf '\n' >&2
 
 send_msg "${exit_json}"

@@ -1,9 +1,9 @@
 import Lean.Data.JsonRpc
 import Lean.Data.Lsp.Communication
 import AfvRpcApi.Types
-import AfvRpcApi.Workspace
+import AfvRpcApi.TestTree
 import AfvRpcApi.State
-import AfvRpcApi.TheoremRunner
+import AfvRpcApi.TestRunner
 
 namespace AfvRpcApi.Server
 
@@ -51,39 +51,39 @@ def sendError (id : RequestID) (code : ErrorCode) (message : String) : ServerM U
   ctx.hOut.writeLspResponseError errorResp
   ctx.hOut.flush
 
-/-- Handle initializeWorkspace notification. -/
-def handleInitializeWorkspace (params : WorkspaceParams) : ServerM Unit := do
+/-- Handle buildTestTree request. -/
+def handleBuildTestTree (id : RequestID) (params : TestTreeParams) : ServerM Unit := do
   let ctx ← read
-  -- Scan all workspace paths
-  let workspaces ← Workspace.scanWorkspaces params.workspacePaths
+  -- Scan all test tree paths
+  let testTrees ← TestTree.scanTestTrees params.testTreePaths
 
   -- Update state
-  State.setWorkspaces ctx.state workspaces
+  State.setTestTrees ctx.state testTrees
 
-  -- Send workspaceInitialized notification
-  sendNotification "workspaceInitialized" Json.null
+  -- Return the built test trees
+  sendResponse id testTrees
 
-/-- Handle updateWorkspace notification. -/
-def handleUpdateWorkspace (params : WorkspaceParams) : ServerM Unit := do
+/-- Handle updateTestTree notification. -/
+def handleUpdateTestTree (params : TestTreeParams) : ServerM Unit := do
   let ctx ← read
+  let currentTestTrees ← State.getTestTrees ctx.state
 
-  -- Scan all workspace paths
-  let workspaces ← Workspace.scanWorkspaces params.workspacePaths
+  -- Scan all test tree paths
+  let testTrees ← TestTree.scanTestTrees params.testTreePaths
 
-  -- Update state
-  State.setWorkspaces ctx.state workspaces
+  -- Update state and notify only when test trees changed
+  if toJson currentTestTrees != toJson testTrees then
+    State.setTestTrees ctx.state testTrees
+    sendNotification "testTreeUpdated" testTrees
 
-  -- Send workspaceUpdated notification
-  sendNotification "workspaceUpdated" workspaces
-
-/-- Handle runTheorem notification. -/
-def handleRunTheorem (params : RunTheoremParams) : ServerM Unit := do
+/-- Handle runTest notification. -/
+def handleRunTest (params : RunTestParams) : ServerM Unit := do
   let ctx ← read
 
   -- Define callback to send testResult notification
-  let onComplete (result : TheoremResult) : IO Unit := do
+  let onComplete (result : TestResult) : IO Unit := do
     try
-      let notif : Notification TheoremResult := {
+      let notif : Notification TestResult := {
         method := "testResult"
         param := result
       }
@@ -93,47 +93,41 @@ def handleRunTheorem (params : RunTheoremParams) : ServerM Unit := do
     catch e =>
       IO.eprintln s!"Error sending testResult notification: {e}"
 
-  -- Spawn background task to run theorems (don't wait)
+  -- Spawn background task to run tests (don't wait)
   let _ ← IO.asTask do
-    TheoremRunner.runTheoremsSequentially ctx.state params.theoremIds onComplete
+    TestRunner.runTestsSequentially ctx.state params.testIds onComplete
 
   return ()
 
-/-- Handle getWorkspace request. -/
-def handleGetWorkspace (id : RequestID) : ServerM Unit := do
+/-- Handle getTestTree request. -/
+def handleGetTestTree (id : RequestID) : ServerM Unit := do
   let ctx ← read
-  let workspaces ← State.getWorkspaces ctx.state
-  sendResponse id workspaces
+  let testTrees ← State.getTestTrees ctx.state
+  sendResponse id testTrees
 
-/-- Handle getTheoremResult request. -/
-def handleGetTheoremResult (id : RequestID) (theoremId : String) : ServerM Unit := do
+/-- Handle getTestResult request. -/
+def handleGetTestResult (id : RequestID) (testId : String) : ServerM Unit := do
   let ctx ← read
-  match ← State.getResult ctx.state theoremId with
+  match ← State.getResult ctx.state testId with
   | some result =>
     sendResponse id result
   | none =>
-    sendError id ErrorCode.invalidParams s!"Theorem not found: {theoremId}"
+    sendError id ErrorCode.invalidParams s!"Test not found: {testId}"
 
 /-- Dispatch a notification to the appropriate handler. -/
 def dispatchNotification (method : String) (params : Json) : ServerM Unit := do
   match method with
-  | "initializeWorkspace" =>
+  | "updateTestTree" =>
     match fromJson? params with
-    | Except.ok (p : WorkspaceParams) => handleInitializeWorkspace p
+    | Except.ok (p : TestTreeParams) => handleUpdateTestTree p
     | Except.error err =>
-      IO.eprintln s!"Error parsing initializeWorkspace params: {err}"
+      IO.eprintln s!"Error parsing updateTestTree params: {err}"
 
-  | "updateWorkspace" =>
+  | "runTest" =>
     match fromJson? params with
-    | Except.ok (p : WorkspaceParams) => handleUpdateWorkspace p
+    | Except.ok (p : RunTestParams) => handleRunTest p
     | Except.error err =>
-      IO.eprintln s!"Error parsing updateWorkspace params: {err}"
-
-  | "runTheorem" =>
-    match fromJson? params with
-    | Except.ok (p : RunTheoremParams) => handleRunTheorem p
-    | Except.error err =>
-      IO.eprintln s!"Error parsing runTheorem params: {err}"
+      IO.eprintln s!"Error parsing runTest params: {err}"
 
   | "exit" =>
     -- Exit notification - we'll handle this in the main loop
@@ -145,12 +139,18 @@ def dispatchNotification (method : String) (params : Json) : ServerM Unit := do
 /-- Dispatch a request to the appropriate handler. -/
 def dispatchRequest (id : RequestID) (method : String) (params : Json) : ServerM Unit := do
   match method with
-  | "getWorkspace" =>
-    handleGetWorkspace id
-
-  | "getTheoremResult" =>
+  | "buildTestTree" =>
     match fromJson? params with
-    | Except.ok (p: GetTheoremResultParams) => handleGetTheoremResult id p.theoremId
+    | Except.ok (p : TestTreeParams) => handleBuildTestTree id p
+    | Except.error err =>
+      sendError id ErrorCode.invalidParams s!"Invalid params: {err}"
+
+  | "getTestTree" =>
+    handleGetTestTree id
+
+  | "getTestResult" =>
+    match fromJson? params with
+    | Except.ok (p: GetTestResultParams) => handleGetTestResult id p.testId
     | Except.error err =>
       sendError id ErrorCode.invalidParams s!"Invalid params: {err}"
 

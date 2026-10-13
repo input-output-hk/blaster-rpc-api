@@ -8,11 +8,11 @@ open AfvRpcApi
 open Lean
 open Std (HashMap)
 
-/-- Server state containing workspaces and theorem results. -/
+/-- Server state containing test trees and test results. -/
 structure ServerState where
-  workspaces : Array Workspace
-  results    : HashMap String TheoremResult
-  workspaceSearchPaths : HashMap String System.SearchPath
+  testTrees : Array TestTree
+  results   : HashMap String TestResult
+  testTreeSearchPaths : HashMap String System.SearchPath
   deriving Inhabited
 
 /-- Thread-safe reference to server state. -/
@@ -21,21 +21,21 @@ abbrev StateRef := IO.Ref ServerState
 /-- Initialize empty server state. -/
 def initState : IO StateRef := do
   IO.mkRef {
-    workspaces := #[]
+    testTrees := #[]
     results := {}
-    workspaceSearchPaths := {}
+    testTreeSearchPaths := {}
   }
 
-/-- Recursively initialize results for all theorems in nodes. -/
-partial def initializeWorkspaceResults (nodes : Array Node) (results : HashMap String TheoremResult) : HashMap String TheoremResult :=
+/-- Recursively initialize results for all tests in nodes. -/
+partial def initializeTestTreeResults (nodes : Array Node) (results : HashMap String TestResult) : HashMap String TestResult :=
   nodes.foldl (fun acc node =>
     match node with
     | .folder _ _ children =>
-      initializeWorkspaceResults children acc
-    | .file _ _ theorems =>
-      theorems.foldl (fun acc' thm =>
-        acc'.insert thm.id {
-          «theorem» := thm
+      initializeTestTreeResults children acc
+    | .file _ _ tests =>
+      tests.foldl (fun acc' test =>
+        acc'.insert test.id {
+          test := test
           time := none
           status := .undetermined
           details := Lean.Json.mkObj [("diagnostics", Lean.Json.arr #[])]
@@ -43,55 +43,55 @@ partial def initializeWorkspaceResults (nodes : Array Node) (results : HashMap S
       ) acc
   ) results
 
-/-- Get all workspaces from state. -/
-def getWorkspaces (state : StateRef) : IO (Array Workspace) := do
+/-- Get all test trees from state. -/
+def getTestTrees (state : StateRef) : IO (Array TestTree) := do
   let s ← state.get
-  return s.workspaces
+  return s.testTrees
 
-/-- Set workspaces and initialize theorem results. -/
-def setWorkspaces (state : StateRef) (workspaces : Array Workspace) : IO Unit := do
-  let mut results : HashMap String TheoremResult := {}
+/-- Set test trees and initialize test results. -/
+def setTestTrees (state : StateRef) (testTrees : Array TestTree) : IO Unit := do
+  let mut results : HashMap String TestResult := {}
 
-  -- Initialize all theorems with undetermined status
-  for workspace in workspaces do
-    results := initializeWorkspaceResults workspace.children results
+  -- Initialize all tests with undetermined status
+  for testTree in testTrees do
+    results := initializeTestTreeResults testTree.children results
 
   state.set {
-    workspaces := workspaces
+    testTrees := testTrees
     results := results
-    workspaceSearchPaths := {}
+    testTreeSearchPaths := {}
   }
 
-/-- Get result for a specific theorem ID. -/
-def getResult (state : StateRef) (theoremId : String) : IO (Option TheoremResult) := do
+/-- Get result for a specific test ID. -/
+def getResult (state : StateRef) (testId : String) : IO (Option TestResult) := do
   let s ← state.get
-  return s.results.get? theoremId
+  return s.results.get? testId
 
-/-- Update result for a specific theorem ID. -/
-def setResult (state : StateRef) (theoremId : String) (result : TheoremResult) : IO Unit := do
+/-- Update result for a specific test ID. -/
+def setResult (state : StateRef) (testId : String) (result : TestResult) : IO Unit := do
   state.modify fun s => {
-    s with results := s.results.insert theoremId result
+    s with results := s.results.insert testId result
   }
 
-/-- Get all theorem results. -/
-def getAllResults (state : StateRef) : IO (HashMap String TheoremResult) := do
+/-- Get all test results. -/
+def getAllResults (state : StateRef) : IO (HashMap String TestResult) := do
   let s ← state.get
   return s.results
 
-def getWorkspaceSearchPath (state : StateRef) (root : String) : IO (Option System.SearchPath) := do
+def getTestTreeSearchPath (state : StateRef) (root : String) : IO (Option System.SearchPath) := do
   let s ← state.get
-  return s.workspaceSearchPaths.get? root
+  return s.testTreeSearchPaths.get? root
 
-def setWorkspaceSearchPath (state : StateRef) (root : String) (sp : System.SearchPath) : IO Unit := do
+def setTestTreeSearchPath (state : StateRef) (root : String) (sp : System.SearchPath) : IO Unit := do
   state.modify fun s => {
-    s with workspaceSearchPaths := s.workspaceSearchPaths.insert root sp
+    s with testTreeSearchPaths := s.testTreeSearchPaths.insert root sp
   }
 
-/-- Update theorem status. -/
-def updateTheoremStatus (state : StateRef) (theoremId : String) (status : TheoremStatus)
+/-- Update test status. -/
+def updateTestStatus (state : StateRef) (testId : String) (status : TestStatus)
     (time : Option Nat := none) (details : Option Lean.Json := none) : IO Unit := do
   let s ← state.get
-  match s.results.get? theoremId with
+  match s.results.get? testId with
   | some result =>
     let updatedResult := {
       result with
@@ -100,9 +100,9 @@ def updateTheoremStatus (state : StateRef) (theoremId : String) (status : Theore
       details := details.getD result.details
     }
     state.set {
-      s with results := s.results.insert theoremId updatedResult
+      s with results := s.results.insert testId updatedResult
     }
   | none =>
-    IO.eprintln s!"Warning: Attempted to update non-existent theorem: {theoremId}"
+    IO.eprintln s!"Warning: Attempted to update non-existent test: {testId}"
 
 end AfvRpcApi.State

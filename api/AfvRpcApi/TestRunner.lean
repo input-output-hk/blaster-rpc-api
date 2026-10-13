@@ -1,12 +1,12 @@
 import AfvRpcApi.Types
 import AfvRpcApi.State
-import AfvRpcApi.Workspace
+import AfvRpcApi.TestTree
 import Std.Data.HashMap
 import Std.Data.HashSet
 import Lean.Data.Lsp
 import Lean.Data.Json
 
-namespace AfvRpcApi.TheoremRunner
+namespace AfvRpcApi.TestRunner
 
 open AfvRpcApi
 
@@ -15,10 +15,6 @@ open AfvRpcApi
 open Lean
 open Std (HashMap HashSet)
 open System (FilePath)
-
-private def toLspPos (pos : Position) : Lsp.Position :=
-  let line := if pos.line == 0 then 0 else pos.line - 1
-  { line := line, character := pos.column }
 
 private def normalizeRange (r : Lsp.Range) : Lsp.Range :=
   let start := r.start
@@ -33,9 +29,6 @@ private def normalizeRange (r : Lsp.Range) : Lsp.Range :=
 private def posLt (a b : Lsp.Position) : Bool :=
   a.line < b.line || (a.line == b.line && a.character < b.character)
 
-private def posLe (a b : Lsp.Position) : Bool :=
-  posLt a b || (a.line == b.line && a.character == b.character)
-
 private def rangesIntersect (a b : Lsp.Range) : Bool :=
   let a := normalizeRange a
   let b := normalizeRange b
@@ -43,7 +36,7 @@ private def rangesIntersect (a b : Lsp.Range) : Bool :=
   let bBeforeA := posLt b.end a.start
   !(aBeforeB || bBeforeA)
 
-private def theoremRangeToLsp (r : Range) : Lsp.Range :=
+private def testRangeToLsp (r : Range) : Lsp.Range :=
   { start := { line := r.startLine, character := r.startCharacter }
     «end» := { line := r.endLine, character := r.endCharacter } }
 
@@ -97,14 +90,14 @@ private def parseLeanJsonDiagnosticLine? (line : String) : Option DiagnosticEntr
     range := normalizeRange range
   }
 
-private def rewriteBySorryInTheorem (path : String) (theoremRange : Range) : IO String := do
-  let _ := theoremRange
+private def rewriteBySorryInTest (path : String) (testRange : Range) : IO String := do
+  let _ := testRange
   IO.FS.readFile path
 
-private def collectFileDiagnosticsForTheorem (path : String) (theoremRange : Range) : IO (Array DiagnosticEntry) := do
-  let content ← rewriteBySorryInTheorem path theoremRange
+private def collectFileDiagnosticsForTest (path : String) (testRange : Range) : IO (Array DiagnosticEntry) := do
+  let content ← rewriteBySorryInTest path testRange
   let root ←
-    match ← Workspace.findWorkspaceRoot (FilePath.mk path) with
+    match ← TestTree.findTestTreeRoot (FilePath.mk path) with
     | some r => pure r.toString
     | none =>
       let parent := (FilePath.mk path).parent.getD (FilePath.mk path)
@@ -134,7 +127,7 @@ private def collectFileDiagnosticsForTheorem (path : String) (theoremRange : Ran
     if let some diag := parseLeanJsonDiagnosticLine? line then
       diags := diags.push { diag with fileName := path }
   if diags.isEmpty then
-    let fallbackRange := theoremRangeToLsp theoremRange
+    let fallbackRange := testRangeToLsp testRange
     for line in combinedOutput.splitOn "\n" do
       let trimmed := line.trim
       if !trimmed.isEmpty then
@@ -157,105 +150,105 @@ private def collectFileDiagnosticsForTheorem (path : String) (theoremRange : Ran
         }
   return diags
 
-private def resolveWorkspaceRoot (workspaces : Array Workspace) (path : String) : Option String :=
-  workspaces.foldl
-    (fun best ws =>
-      if path.startsWith ws.path then
+private def resolveTestTreeRoot (testTrees : Array TestTree) (path : String) : Option String :=
+  testTrees.foldl
+    (fun best tree =>
+      if path.startsWith tree.path then
         match best with
-        | none => some ws.path
+        | none => some tree.path
         | some current =>
-          if ws.path.length > current.length then some ws.path else best
+          if tree.path.length > current.length then some tree.path else best
       else
         best)
     none
 
-private def loadWorkspaceSearchPath (root : String) : IO (Option SearchPath) :=
-  Workspace.loadWorkspaceSearchPath (FilePath.mk root)
+private def loadTestTreeSearchPath (root : String) : IO (Option SearchPath) :=
+  TestTree.loadTestTreeSearchPath (FilePath.mk root)
 
 private def ensureToolchainSearchPath (path : String) : IO Unit := do
-  if let some root ← Workspace.findWorkspaceRoot (FilePath.mk path) then
-    if let some sysroot ← Workspace.findWorkspaceSysroot root then
+  if let some root ← TestTree.findTestTreeRoot (FilePath.mk path) then
+    if let some sysroot ← TestTree.findTestTreeSysroot root then
       Lean.initSearchPath sysroot
 
 private def getFileDiagnosticsCached
     (cacheRef : IO.Ref (HashMap String (Array DiagnosticEntry)))
     (path : String)
-    (theoremRange : Range) : IO (Array DiagnosticEntry) := do
+    (testRange : Range) : IO (Array DiagnosticEntry) := do
   let cacheKey :=
-    s!"{path}::{theoremRange.startLine}:{theoremRange.startCharacter}-{theoremRange.endLine}:{theoremRange.endCharacter}"
+    s!"{path}::{testRange.startLine}:{testRange.startCharacter}-{testRange.endLine}:{testRange.endCharacter}"
   let cache ← cacheRef.get
   match cache.get? cacheKey with
   | some diags =>
     return diags
   | none =>
-    let diags ← collectFileDiagnosticsForTheorem path theoremRange
+    let diags ← collectFileDiagnosticsForTest path testRange
     cacheRef.modify (·.insert cacheKey diags)
     return diags
 
-private def findNextTheoremStartLine
-    (results : HashMap String TheoremResult)
+private def findNextTestStartLine
+    (results : HashMap String TestResult)
     (path : String)
     (startLine : Nat) : Option Nat :=
   results.toList.foldl
     (fun best (_, r) =>
-      if r.theorem.path == path && r.theorem.range.startLine > startLine then
+      if r.test.path == path && r.test.range.startLine > startLine then
         match best with
-        | none => some r.theorem.range.startLine
-        | some current => some (Nat.min current r.theorem.range.startLine)
+        | none => some r.test.range.startLine
+        | some current => some (Nat.min current r.test.range.startLine)
       else
         best)
     none
 
-private def diagnosticBelongsToTheorem
-    (theoremRange : Lsp.Range)
+private def diagnosticBelongsToTest
+    (testRange : Lsp.Range)
     (nextStartLine? : Option Nat)
     (diagRange : Lsp.Range) : Bool :=
-  if rangesIntersect theoremRange diagRange then
+  if rangesIntersect testRange diagRange then
     true
   else
     let line := diagRange.start.line
-    let afterStart := line >= theoremRange.start.line
+    let afterStart := line >= testRange.start.line
     let beforeNext :=
       match nextStartLine? with
       | some nextLine => line < nextLine
       | none => true
     afterStart && beforeNext
 
-/-- Run verification for a single theorem.
+/-- Run verification for a single test.
     Updates state and invokes callback with result when complete. -/
-def runTheoremVerificationWithCache
+def runTestVerificationWithCache
     (state : State.StateRef)
     (cacheRef : IO.Ref (HashMap String (Array DiagnosticEntry)))
-    (theoremId : String)
-    (onComplete : TheoremResult → IO Unit) : IO Unit := do
-  -- Get the theorem from state
-  match ← State.getResult state theoremId with
+    (testId : String)
+    (onComplete : TestResult → IO Unit) : IO Unit := do
+  -- Get the test from state
+  match ← State.getResult state testId with
   | none =>
-    IO.eprintln s!"Error: Theorem not found: {theoremId}"
+    IO.eprintln s!"Error: Test not found: {testId}"
     return
   | some result =>
     -- Set status to running
-    State.updateTheoremStatus state theoremId .running
+    State.updateTestStatus state testId .running
 
     let startTime ← IO.monoMsNow
     let (status, details) ← try
-      let path := result.«theorem».path
+      let path := result.test.path
       ensureToolchainSearchPath path
       let pathReal ← IO.FS.realPath path
-      let workspaces ← State.getWorkspaces state
-      let workspaceRoot? := resolveWorkspaceRoot workspaces path
-      let searchPath? ← match workspaceRoot? with
+      let testTrees ← State.getTestTrees state
+      let testTreeRoot? := resolveTestTreeRoot testTrees path
+      let searchPath? ← match testTreeRoot? with
         | none =>
           pure none
         | some root =>
-          match ← State.getWorkspaceSearchPath state root with
+          match ← State.getTestTreeSearchPath state root with
           | some sp =>
             pure (some sp)
           | none =>
-            let sp? ← loadWorkspaceSearchPath root
+            let sp? ← loadTestTreeSearchPath root
             match sp? with
             | some sp =>
-              State.setWorkspaceSearchPath state root sp
+              State.setTestTreeSearchPath state root sp
               pure (some sp)
             | none =>
               pure none
@@ -264,15 +257,15 @@ def runTheoremVerificationWithCache
         let current ← Lean.searchPathRef.get
         Lean.searchPathRef.set (current ++ sp)
       | none =>
-        IO.eprintln s!"Warning: No workspace context for {path}"
-      let theoremRange := theoremRangeToLsp result.«theorem».range
+        IO.eprintln s!"Warning: No test tree context for {path}"
+      let testRange := testRangeToLsp result.test.range
       let allResults ← State.getAllResults state
-      let nextStartLine? := findNextTheoremStartLine allResults path result.theorem.range.startLine
-      let diags ← getFileDiagnosticsCached cacheRef path result.theorem.range
+      let nextStartLine? := findNextTestStartLine allResults path result.test.range.startLine
+      let diags ← getFileDiagnosticsCached cacheRef path result.test.range
       let mut relevantDiags : Array DiagnosticEntry := #[]
       for diag in diags do
         let msgPathReal ← IO.FS.realPath diag.fileName
-        if msgPathReal == pathReal && diagnosticBelongsToTheorem theoremRange nextStartLine? diag.range then
+        if msgPathReal == pathReal && diagnosticBelongsToTest testRange nextStartLine? diag.range then
           relevantDiags := relevantDiags.push diag
       let hasError := relevantDiags.any (·.severity == "error")
       let mut seen : HashSet String := {}
@@ -283,31 +276,33 @@ def runTheoremVerificationWithCache
           seen := seen.insert key
           diagnosticArr := diagnosticArr.push diagnostic
       let diagnostics := Json.arr diagnosticArr
-      let details := Json.mkObj [("diagnostics", diagnostics)]
-      let status := if hasError then TheoremStatus.invalid else TheoremStatus.valid
+      let details := Json.mkObj [(
+        "diagnostics", diagnostics
+      )]
+      let status := if hasError then TestStatus.invalid else TestStatus.valid
       pure (status, details)
     catch e =>
-      IO.eprintln s!"Error processing theorem {theoremId}: {e}"
+      IO.eprintln s!"Error processing test {testId}: {e}"
       let details := Json.mkObj [("diagnostics", Json.arr #[])]
-      pure (TheoremStatus.invalid, details)
+      pure (TestStatus.invalid, details)
     let endTime ← IO.monoMsNow
     let elapsed := endTime - startTime
 
     -- Update result with final status and time
-    State.updateTheoremStatus state theoremId status (some elapsed) (some details)
+    State.updateTestStatus state testId status (some elapsed) (some details)
 
     -- Get the updated result and invoke callback
-    match ← State.getResult state theoremId with
+    match ← State.getResult state testId with
     | some finalResult => onComplete finalResult
-    | none => IO.eprintln s!"Error: Theorem disappeared: {theoremId}"
+    | none => IO.eprintln s!"Error: Test disappeared: {testId}"
 
-/-- Run verification for multiple theorems sequentially. -/
-def runTheoremsSequentially
+/-- Run verification for multiple tests sequentially. -/
+def runTestsSequentially
     (state : State.StateRef)
-    (theoremIds : Array String)
-    (onComplete : TheoremResult → IO Unit) : IO Unit := do
+    (testIds : Array String)
+    (onComplete : TestResult → IO Unit) : IO Unit := do
   let cacheRef ← IO.mkRef ({} : HashMap String (Array DiagnosticEntry))
-  for theoremId in theoremIds do
-    runTheoremVerificationWithCache state cacheRef theoremId onComplete
+  for testId in testIds do
+    runTestVerificationWithCache state cacheRef testId onComplete
 
-end AfvRpcApi.TheoremRunner
+end AfvRpcApi.TestRunner

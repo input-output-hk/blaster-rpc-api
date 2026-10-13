@@ -1,19 +1,19 @@
 # afv-rpc-api
 
-Lean4 JSON-RPC server for scanning workspaces and running theorem checks.
+Lean4 JSON-RPC server for scanning test trees and running tests.
 
 ## What it does
 
 The RPC server exposes a small JSON-RPC 2.0 API over stdio to:
 
-- initialize one or more workspaces and scan for theorems
-- return the full workspace tree (folders, files, theorems)
-- run theorem checks and stream results
+- initialize one or more test trees and scan for tests
+- return the full test tree (folders, files, tests)
+- run tests and stream results
 
 ## Repository layout
 
 - api/: Lean4 implementation of the RPC server and types
-- example/: sample Lean workspace used for demos/tests
+- example/: sample Lean test tree used for demos/tests
 - demo/: scripts that exercise the RPC API over stdio
 - scripts/: utility scripts (e.g., multi-arch build)
 
@@ -57,19 +57,21 @@ Build the server:
 
 - (cd api && lake build)
 
-Run the demo (initializes the example workspace and prints the full tree):
+Run the demo (initializes the example test tree and prints the full tree):
 
-- demo/init-workspace-demo.sh
+- demo/init-test-tree.sh
 
 ## JSON-RPC methods (high level)
 
 Notifications:
 
-- initializeWorkspace { workspacePaths: string[] }
-- updateWorkspace { workspacePaths: string[] }
-- runTheorem string[]
+- updateTestTree { testTreePaths: string[] }
+- runTest string[]
+
+Note: `updateTestTree` emits `testTreeUpdated` only when the scanned test tree changes.
 
 Requests:
 
-- getWorkspace -> Workspace[]
-- getTheoremResult string -> TheoremResult
+- buildTestTree { testTreePaths: string[] } -> TestTree[]
+- getTestTree -> TestTree[]
+- getTestResult string -> TestResult

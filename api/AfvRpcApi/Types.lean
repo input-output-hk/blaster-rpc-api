@@ -11,30 +11,30 @@ structure Range where
   endCharacter : Nat
   deriving ToJson, FromJson, Inhabited, Repr
 
-structure Theorem where
+structure Test where
   id : String
   label : String
   path : String
   range : Range
   deriving ToJson, FromJson, Inhabited, Repr
 
-inductive TheoremStatus where
+inductive TestStatus where
   | undetermined
   | running
   | valid
   | invalid
 
-def TheoremStatus.toString (s : TheoremStatus) : String :=
+def TestStatus.toString (s : TestStatus) : String :=
   match s with
   | .undetermined => "undetermined"
   | .running => "running"
   | .valid => "valid"
   | .invalid => "invalid"
 
-instance : ToJson TheoremStatus where
+instance : ToJson TestStatus where
   toJson s := toJson s.toString
 
-instance : FromJson TheoremStatus where
+instance : FromJson TestStatus where
   fromJson? j := do
     let s <- fromJson? j
     match s with
@@ -42,23 +42,23 @@ instance : FromJson TheoremStatus where
     | "running" => return .running
     | "valid" => return .valid
     | "invalid" => return .invalid
-    | _ => throw s!"Unknown theorem status: {s}"
+    | _ => throw s!"Unknown test status: {s}"
 
-instance : Inhabited TheoremStatus where
+instance : Inhabited TestStatus where
   default := .undetermined
 
-instance : Repr TheoremStatus where
+instance : Repr TestStatus where
   reprPrec s _ := repr s.toString
 
-structure TheoremResult where
-  «theorem» : Theorem
+structure TestResult where
+  test : Test
   time : Option Nat
-  status : TheoremStatus
+  status : TestStatus
   details : Json
   deriving ToJson, FromJson, Inhabited
 
-instance : Repr TheoremResult where
-  reprPrec r _ := s!"TheoremResult({r.«theorem».id}, {r.status.toString}, {r.time})"
+instance : Repr TestResult where
+  reprPrec r _ := s!"TestResult({r.test.id}, {r.status.toString}, {r.time})"
 
 inductive NodeType where
   | folder
@@ -91,7 +91,7 @@ instance : Repr NodeType where
 
 inductive Node where
   | folder (path : String) (label : String) (children : Array Node)
-  | file (path : String) (label : String) (theorems : Array Theorem)
+  | file (path : String) (label : String) (tests : Array Test)
 
 def Node.nodeType (n : Node) : NodeType :=
   match n with
@@ -118,12 +118,12 @@ mutual
         ("label", Lean.toJson label),
         ("children", Json.arr (children.map Node.toJson))
       ]
-    | .file path label theorems =>
+    | .file path label tests =>
       Json.mkObj [
         ("type", Lean.toJson NodeType.file),
         ("path", Lean.toJson path),
         ("label", Lean.toJson label),
-        ("theorems", Lean.toJson theorems)
+        ("tests", Lean.toJson tests)
       ]
 
   partial def Node.fromJson? (j : Json) : Except String Node := do
@@ -136,8 +136,8 @@ mutual
       let children <- childrenJson.mapM Node.fromJson?
       return .folder path label children
     | .file =>
-      let theorems <- j.getObjValAs? (Array Theorem) "theorems"
-      return .file path label theorems
+      let tests <- j.getObjValAs? (Array Test) "tests"
+      return .file path label tests
 end
 
 instance : ToJson Node where
@@ -152,22 +152,22 @@ instance : Inhabited Node where
 instance : Repr Node where
   reprPrec n _ := s!"Node({n.nodeType}, {n.label})"
 
-structure Workspace where
+structure TestTree where
   path : String
   label : String
   children : Array Node
   deriving ToJson, FromJson, Inhabited, Repr
 
-structure WorkspaceParams where
-  workspacePaths : Array String
+structure TestTreeParams where
+  testTreePaths : Array String
   deriving ToJson, FromJson, Inhabited, Repr
 
-structure RunTheoremParams where
-  theoremIds : Array String
+structure RunTestParams where
+  testIds : Array String
   deriving ToJson, FromJson, Inhabited, Repr
 
-structure GetTheoremResultParams where
-  theoremId : String
+structure GetTestResultParams where
+  testId : String
   deriving ToJson, FromJson, Inhabited, Repr
 
 end AfvRpcApi
