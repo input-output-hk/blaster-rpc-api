@@ -9,4 +9,4 @@ root = "AfvExample"
 [[require]]
 name = "Blaster"
 git = "https://github.com/input-output-hk/Lean-blaster"
-rev = "feat/multilogging-support"
+rev = "main"

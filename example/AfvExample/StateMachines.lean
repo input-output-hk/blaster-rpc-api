@@ -39,7 +39,7 @@ instance counterBuggy : StateMachine Request Nat where
 
   invariants _ s := s ≤ 5
 
-#bmc (max-depth: 6) [counterBuggy] -- Should be invalid
-#kind (max-depth: 6) [counterBuggy] -- Should be invalid
+#bmc (max-depth: 6) (solve-result: 1) [counterBuggy] -- Should be invalid
+#kind (max-depth: 6) (solve-result: 1) [counterBuggy] -- Should be invalid
 
 end Test.StepCounterExample
