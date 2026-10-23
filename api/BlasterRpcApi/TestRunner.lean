@@ -1,14 +1,15 @@
-import AfvRpcApi.Types
-import AfvRpcApi.State
-import AfvRpcApi.TestTree
+import BlasterRpcApi.Types
+import BlasterRpcApi.State
+import BlasterRpcApi.TestTree
+import BlasterRpcApi.InvalidResultFixture
 import Std.Data.HashMap
 import Std.Data.HashSet
 import Lean.Data.Lsp
 import Lean.Data.Json
 
-namespace AfvRpcApi.TestRunner
+namespace BlasterRpcApi.TestRunner
 
-open AfvRpcApi
+open BlasterRpcApi
 
 /-! ## LSP-style Verification -/
 
@@ -103,8 +104,8 @@ private def collectFileDiagnosticsForTest (path : String) (testRange : Range) : 
       let parent := (FilePath.mk path).parent.getD (FilePath.mk path)
       pure parent.toString
   let tmpName :=
-    let stem := (FilePath.mk path).fileStem.getD "AfvTmp"
-    s!"{stem}.afvtmp.lean"
+    let stem := (FilePath.mk path).fileStem.getD "BlasterTmp"
+    s!"{stem}.blastertmp.lean"
   let originalDir := (FilePath.mk path).parent.getD (FilePath.mk root)
   let tmpPath := originalDir / tmpName
   IO.FS.writeFile tmpPath content
@@ -126,6 +127,8 @@ private def collectFileDiagnosticsForTest (path : String) (testRange : Range) : 
   for line in combinedOutput.splitOn "\n" do
     if let some diag := parseLeanJsonDiagnosticLine? line then
       diags := diags.push { diag with fileName := path }
+  if out.exitCode != 0 && !(diags.any (·.severity == "error")) then
+    throw (IO.userError s!"Lean exited with code {out.exitCode}: {combinedOutput}")
   if diags.isEmpty then
     let fallbackRange := testRangeToLsp testRange
     for line in combinedOutput.splitOn "\n" do
@@ -220,7 +223,7 @@ def runTestVerificationWithCache
     (state : State.StateRef)
     (cacheRef : IO.Ref (HashMap String (Array DiagnosticEntry)))
     (testId : String)
-    (onComplete : TestResult → IO Unit) : IO Unit := do
+    (onEvent : Json → IO Unit) : IO Unit := do
   -- Get the test from state
   match ← State.getResult state testId with
   | none =>
@@ -229,9 +232,10 @@ def runTestVerificationWithCache
   | some result =>
     -- Set status to running
     State.updateTestStatus state testId .running
+    onEvent (testEvent "test-update" result.test [("isRunning", toJson true)])
 
     let startTime ← IO.monoMsNow
-    let (status, details) ← try
+    let (status, details, failure) ← try
       let path := result.test.path
       ensureToolchainSearchPath path
       let pathReal ← IO.FS.realPath path
@@ -262,12 +266,22 @@ def runTestVerificationWithCache
       let allResults ← State.getAllResults state
       let nextStartLine? := findNextTestStartLine allResults path result.test.range.startLine
       let diags ← getFileDiagnosticsCached cacheRef path result.test.range
+      let firstTestLine := allResults.toList.foldl (fun earliest (_, entry) =>
+        if entry.test.path == path then Nat.min earliest entry.test.range.startLine else earliest) testRange.start.line
+      if diags.any (fun diag => diag.severity == "error" && diag.range.start.line < firstTestLine) then
+        throw (IO.userError "Lean reported an error before the first test. Check imports and preceding declarations.")
       let mut relevantDiags : Array DiagnosticEntry := #[]
       for diag in diags do
         let msgPathReal ← IO.FS.realPath diag.fileName
         if msgPathReal == pathReal && diagnosticBelongsToTest testRange nextStartLine? diag.range then
           relevantDiags := relevantDiags.push diag
       let hasError := relevantDiags.any (·.severity == "error")
+      let hasCounterexample := relevantDiags.any fun diag =>
+        diag.message.endsWith "Falsified" || diag.message.startsWith "Counterexample:"
+      if hasError && !hasCounterexample then
+        let messages := relevantDiags.filterMap fun diag =>
+          if diag.severity == "error" then some diag.message else none
+        throw (IO.userError (String.intercalate "\n" messages.toList))
       let mut seen : HashSet String := {}
       let mut diagnosticArr : Array Json := #[]
       for diag in relevantDiags do
@@ -280,11 +294,11 @@ def runTestVerificationWithCache
         "diagnostics", diagnostics
       )]
       let status := if hasError then TestStatus.invalid else TestStatus.valid
-      pure (status, details)
+      pure (status, details, (none : Option String))
     catch e =>
       IO.eprintln s!"Error processing test {testId}: {e}"
       let details := Json.mkObj [("diagnostics", Json.arr #[])]
-      pure (TestStatus.invalid, details)
+      pure (TestStatus.invalid, details, some s!"{e}")
     let endTime ← IO.monoMsNow
     let elapsed := endTime - startTime
 
@@ -292,17 +306,22 @@ def runTestVerificationWithCache
     State.updateTestStatus state testId status (some elapsed) (some details)
 
     -- Get the updated result and invoke callback
-    match ← State.getResult state testId with
-    | some finalResult => onComplete finalResult
-    | none => IO.eprintln s!"Error: Test disappeared: {testId}"
+    match failure with
+    | some message => onEvent (testEvent "test-error" result.test [
+        ("error", Json.mkObj [("message", toJson message)])])
+    | none =>
+      if status matches .invalid then
+        onEvent (testEvent "test-result" result.test [("result", InvalidResultFixture.result)])
+      onEvent (testEvent "test-update" result.test [
+        ("status", toJson status), ("isRunning", toJson false), ("time", toJson elapsed)])
 
 /-- Run verification for multiple tests sequentially. -/
 def runTestsSequentially
     (state : State.StateRef)
     (testIds : Array String)
-    (onComplete : TestResult → IO Unit) : IO Unit := do
+    (onEvent : Json → IO Unit) : IO Unit := do
   let cacheRef ← IO.mkRef ({} : HashMap String (Array DiagnosticEntry))
   for testId in testIds do
-    runTestVerificationWithCache state cacheRef testId onComplete
+    runTestVerificationWithCache state cacheRef testId onEvent
 
-end AfvRpcApi.TestRunner
+end BlasterRpcApi.TestRunner

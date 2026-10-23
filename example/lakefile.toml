@@ -1,10 +1,10 @@
-name = "AfvExample"
+name = "BlasterExample"
 version = "0.1.0"
-defaultTargets = ["AfvExample"]
+defaultTargets = ["BlasterExample"]
 
 [[lean_lib]]
-name = "AfvExample"
-root = "AfvExample"
+name = "BlasterExample"
+root = "BlasterExample"
 
 [[require]]
 name = "Blaster"

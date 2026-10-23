@@ -1,4 +1,4 @@
-import AfvRpcApi.Types
+import BlasterRpcApi.Types
 import Std.Data.HashMap
 import Lake.Config.InstallPath
 import Lake.Config.Env
@@ -8,22 +8,20 @@ import Lake.Util.Log
 import Std.Internal.Async.System
 import Lean.Data.Lsp.Utf16
 
-namespace AfvRpcApi.TestTree
+namespace BlasterRpcApi.TestTree
 
-open AfvRpcApi
+open BlasterRpcApi
 open System (FilePath)
 
 def findTestTreeRoot (path : FilePath) : IO (Option FilePath) := do
   let mut current :=
     if (← path.isDir) then path else path.parent.getD path
-  let root := current
   let mut done := false
   while !done do
-    let candidate := current / "lakefile.toml"
-    if ← candidate.pathExists then
+    if (← (current / "lakefile.toml").pathExists) || (← (current / "lakefile.lean").pathExists) then
       return some current
     let parent := current.parent.getD current
-    if parent == current || current == root.parent.getD root then
+    if parent == current then
       done := true
     current := parent
   return none
@@ -76,15 +74,9 @@ def loadTestTreeSearchPath (root : FilePath) : IO (Option System.SearchPath) := 
 
   return some paths
 
-/-- Global counter for generating unique test IDs. -/
-initialize idCounterRef : IO.Ref Nat ← IO.mkRef 0
-
 /-- Generate a unique test ID based on file path, label, and line number. -/
 def generateTestId (filePath : String) (label : String) (line : Nat) : IO String := do
-  let counter ← idCounterRef.get
-  idCounterRef.modify (· + 1)
-  -- Create a simple hash-like ID
-  let hash := filePath.hash.toNat + label.hash.toNat + line + counter
+  let hash := s!"{filePath}:{label}:{line}".hash
   return s!"{hash}"
 
 private def trimCommandLabel (cmdText : String) : String :=
@@ -130,7 +122,7 @@ private def mkTestFromLine
       startLine := lineIdx
       startCharacter := 0
       endLine := lineIdx
-      endCharacter := lineText.length
+      endCharacter := lineText.utf16Length
     }
   }
 
@@ -154,6 +146,7 @@ def extractTests (filePath : String) (content : String) : IO (Array Test) := do
 /-- Scan a single .lean file for tests.
     Returns None if the file cannot be read or is not a valid UTF-8 file. -/
 def scanFile (path : String) : IO (Option Node) := do
+  if path.endsWith ".blastertmp.lean" then return none
   try
     -- Read file content
     let content ← IO.FS.readFile path
@@ -185,7 +178,7 @@ partial def scanFolder (path : String) : IO (Option Node) := do
       let entryPath := entry.path.toString
 
       if ← entry.path.isDir then
-        if entry.path.fileName == some ".lake" then
+        if entry.path.fileName == some ".lake" || entry.path.fileName == some ".git" || entry.path.fileName == some "node_modules" then
           continue
         -- Recursively scan subdirectory
         if let some childNode ← scanFolder entryPath then
@@ -229,7 +222,7 @@ def scanTestTree (path : String) : IO (Option TestTree) := do
       let entryPath := entry.path.toString
 
       if ← entry.path.isDir then
-        if entry.path.fileName == some ".lake" then
+        if entry.path.fileName == some ".lake" || entry.path.fileName == some ".git" || entry.path.fileName == some "node_modules" then
           continue
         -- Recursively scan subdirectory
         if let some childNode ← scanFolder entryPath then
@@ -265,4 +258,4 @@ def scanTestTrees (paths : Array String) : IO (Array TestTree) := do
 
   return testTrees
 
-end AfvRpcApi.TestTree
+end BlasterRpcApi.TestTree

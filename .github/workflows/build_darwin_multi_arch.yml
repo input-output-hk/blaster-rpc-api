@@ -32,8 +32,8 @@ jobs:
       - name: Upload Darwin binaries
         uses: actions/upload-artifact@v4
         with:
-          name: afv-rpc-api-darwin-binaries
+          name: blaster-rpc-api-darwin-binaries
           path: |
-            dist/afv-rpc-api-darwin-arm64
-            dist/afv-rpc-api-darwin-x64
+            dist/blaster-rpc-api-darwin-arm64
+            dist/blaster-rpc-api-darwin-x64
           if-no-files-found: error

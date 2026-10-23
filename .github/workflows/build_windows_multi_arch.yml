@@ -35,8 +35,8 @@ jobs:
       - name: Upload Windows x64 binary
         uses: actions/upload-artifact@v4
         with:
-          name: afv-rpc-api-win32-x64
-          path: dist/afv-rpc-api-win32-x64.exe
+          name: blaster-rpc-api-win32-x64
+          path: dist/blaster-rpc-api-win32-x64.exe
           if-no-files-found: error
 
   build-win32-arm64:
@@ -70,6 +70,6 @@ jobs:
       - name: Upload Windows arm64 binary
         uses: actions/upload-artifact@v4
         with:
-          name: afv-rpc-api-win32-arm64
-          path: dist/afv-rpc-api-win32-arm64.exe
+          name: blaster-rpc-api-win32-arm64
+          path: dist/blaster-rpc-api-win32-arm64.exe
           if-no-files-found: error

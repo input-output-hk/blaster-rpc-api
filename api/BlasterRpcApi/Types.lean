@@ -1,6 +1,6 @@
 import Lean.Data.Json
 
-namespace AfvRpcApi
+namespace BlasterRpcApi
 
 open Lean
 
@@ -16,7 +16,11 @@ structure Test where
   label : String
   path : String
   range : Range
+  workspaceId : String := ""
+  group : Array String := #[]
   deriving ToJson, FromJson, Inhabited, Repr
+
+def Test.key (test : Test) : String := s!"{test.workspaceId}:{test.id}"
 
 inductive TestStatus where
   | undetermined
@@ -55,6 +59,7 @@ structure TestResult where
   time : Option Nat
   status : TestStatus
   details : Json
+  isWaiting : Bool := false
   deriving ToJson, FromJson, Inhabited
 
 instance : Repr TestResult where
@@ -156,18 +161,43 @@ structure TestTree where
   path : String
   label : String
   children : Array Node
+  workspaceId : String := ""
   deriving ToJson, FromJson, Inhabited, Repr
 
-structure TestTreeParams where
-  testTreePaths : Array String
-  deriving ToJson, FromJson, Inhabited, Repr
+structure Workspace where
+  id : String
+  path : String
+  deriving FromJson, ToJson
 
-structure RunTestParams where
-  testIds : Array String
-  deriving ToJson, FromJson, Inhabited, Repr
+structure FetchParams where
+  workspaces : Array Workspace
+  deriving FromJson
 
-structure GetTestResultParams where
-  testId : String
-  deriving ToJson, FromJson, Inhabited, Repr
+structure RunSelection where
+  workspacePath : String
+  testIds : Option (Array String) := none
+  deriving FromJson
 
-end AfvRpcApi
+structure RunParams where
+  testRuns : Array RunSelection
+  deriving FromJson
+
+def TestResult.toPublicJson (result : TestResult) : Json :=
+  let test := result.test
+  let fields := [
+    ("id", toJson test.id), ("workspaceId", toJson test.workspaceId),
+    ("name", toJson test.label), ("group", toJson test.group),
+    ("location", Json.mkObj [
+      ("path", toJson test.path),
+      ("range", Json.mkObj [
+        ("start", Json.mkObj [("line", toJson test.range.startLine), ("character", toJson test.range.startCharacter)]),
+        ("end", Json.mkObj [("line", toJson test.range.endLine), ("character", toJson test.range.endCharacter)])])]),
+    ("status", toJson (if result.status matches .running then TestStatus.undetermined else result.status)),
+    ("isWaiting", toJson result.isWaiting), ("isRunning", toJson (result.status matches .running))]
+  Json.mkObj (fields ++ result.time.toList.map (fun time => ("time", toJson time)))
+
+def testEvent (kind : String) (test : Test) (fields : List (String × Json)) : Json :=
+  Json.mkObj [("type", toJson kind), ("payload", Json.mkObj (
+    [("workspaceId", toJson test.workspaceId), ("testId", toJson test.id)] ++ fields))]
+
+end BlasterRpcApi

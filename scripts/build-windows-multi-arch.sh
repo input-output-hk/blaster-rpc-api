@@ -25,7 +25,7 @@ mkdir -p "${OUT_DIR}"
 
 build_for_arch() {
   local arch="$1"
-  local out_bin="${OUT_DIR}/afv-rpc-api-win32-${arch}.exe"
+  local out_bin="${OUT_DIR}/blaster-rpc-api-win32-${arch}.exe"
 
   echo "Building for win32/${arch}..." >&2
   (
@@ -34,7 +34,7 @@ build_for_arch() {
     lake build
   )
 
-  local src_bin="${API_DIR}/.lake/build/bin/afv-rpc-api.exe"
+  local src_bin="${API_DIR}/.lake/build/bin/blaster-rpc-api.exe"
   if [[ ! -f "${src_bin}" ]]; then
     echo "Error: build output not found for win32/${arch}: ${src_bin}" >&2
     exit 1

@@ -1,10 +1,10 @@
-name = "afv-rpc-api"
+name = "blaster-rpc-api"
 version = "0.1.0"
-defaultTargets = ["afv-rpc-api"]
+defaultTargets = ["blaster-rpc-api"]
 
 [[lean_lib]]
-name = "AfvRpcApi"
+name = "BlasterRpcApi"
 
 [[lean_exe]]
-name = "afv-rpc-api"
+name = "blaster-rpc-api"
 root = "Main"

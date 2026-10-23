@@ -27,8 +27,8 @@ RUN lake build \
     -K=lean.c.linkArgs=-Wl,--icf=safe \
     -K=lean.c.linkArgs=-Wl,-O1 \
     -K=lean.c.linkArgs=-Wl,--strip-all
-RUN upx --best --lzma .lake/build/bin/afv-rpc-api
-RUN mkdir -p /out && cp .lake/build/bin/afv-rpc-api /out/afv-rpc-api
+RUN upx --best --lzma .lake/build/bin/blaster-rpc-api
+RUN mkdir -p /out && cp .lake/build/bin/blaster-rpc-api /out/blaster-rpc-api
 
 FROM scratch
 COPY --from=build /out/ /out/

@@ -37,7 +37,7 @@ for platform in "${platforms[@]}"; do
     --output "type=local,dest=${dest}" \
     "${API_DIR}"
 
-  src_bin="${dest}/out/afv-rpc-api"
+  src_bin="${dest}/out/blaster-rpc-api"
   if [[ ! -f "${src_bin}" ]]; then
     echo "Error: build output not found for ${platform}." >&2
     exit 1
@@ -49,7 +49,7 @@ for platform in "${platforms[@]}"; do
   elif [[ "${platform}" == "linux/arm64" ]]; then
     out_suffix="linux-arm64"
   fi
-  out_bin="${OUT_DIR}/afv-rpc-api-${out_suffix}"
+  out_bin="${OUT_DIR}/blaster-rpc-api-${out_suffix}"
   cp "${src_bin}" "${out_bin}"
   chmod +x "${out_bin}"
   echo "Wrote ${out_bin}" >&2

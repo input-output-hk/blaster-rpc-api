@@ -22,8 +22,8 @@ jobs:
       - name: Upload Linux binaries
         uses: actions/upload-artifact@v4
         with:
-          name: afv-rpc-api-linux-binaries
+          name: blaster-rpc-api-linux-binaries
           path: |
-            dist/afv-rpc-api-linux-x64
-            dist/afv-rpc-api-linux-arm64
+            dist/blaster-rpc-api-linux-x64
+            dist/blaster-rpc-api-linux-arm64
           if-no-files-found: error

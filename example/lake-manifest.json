@@ -11,5 +11,5 @@
    "inputRev": "main",
    "inherited": false,
    "configFile": "lakefile.lean"}],
- "name": "AfvExample",
+ "name": "BlasterExample",
  "lakeDir": ".lake"}

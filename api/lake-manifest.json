@@ -11,5 +11,5 @@
    "inputRev": "staging",
    "inherited": false,
    "configFile": "lakefile.lean"}],
- "name": "«afv-rpc-api»",
+ "name": "«blaster-rpc-api»",
  "lakeDir": ".lake"}
